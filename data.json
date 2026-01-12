@@ -1,0 +1,7 @@
+{
+  "description": "Legitimate Shipment",
+  "weight": "10kg",
+  "origin": "Tunis",
+  "destination": "Paris",
+  "customsCleared": true
+}

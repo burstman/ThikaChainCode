@@ -7,30 +7,48 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
-// CheckPermissionClientOrgID checks if the client has a specific attribute value.
+// AssertClientAttribute checks if the client has a specific attribute value.
 // It returns true if the attribute matches, or false and an error if it does not.
-func CheckPermissionClientOrgID(ctx contractapi.TransactionContextInterface, attrName string, attrValue string) (bool, error) {
-	// AssertAttributeValue returns nil if the attribute matches the value
-	err := ctx.GetClientIdentity().AssertAttributeValue(attrName, attrValue)
+func AssertClientAttribute(ctx contractapi.TransactionContextInterface, attrName string, expectedValue string) error {
 
+	// DEBUG: Get the ID to see WHO is calling
+	// This usually returns something like "x509::CN=creator1,OU=client..."
+	clientID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
-		// Return false and a formatted error message
-		return false, fmt.Errorf("access denied: user does not have attribute '%s' with value '%s'", attrName, attrValue)
+		return fmt.Errorf("failed to get client ID: %v", err)
 	}
 
-	// Return true if the check passed
-	return true, nil
+	val, found, err := ctx.GetClientIdentity().GetAttributeValue(attrName)
+	if err != nil {
+		return fmt.Errorf("error retrieving attribute '%s': %v", attrName, err)
+	}
+
+	if !found {
+		// Include the Client ID in the error message for debugging
+		return fmt.Errorf("access denied: attribute '%s' NOT found. Caller ID: %s", attrName, clientID)
+	}
+
+	if val != expectedValue {
+		return fmt.Errorf("access denied: attribute '%s' value mismatch. Expected '%s', got '%s'", attrName, expectedValue, val)
+	}
+
+	return nil
 }
 
-func GetClientIdentity(ctx contractapi.TransactionContextInterface) string {
-	id, _ := ctx.GetClientIdentity().GetID()
-	return id
+func GetClientIdentity(ctx contractapi.TransactionContextInterface) (string, error) {
+	id, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get client identity: %v", err)
+	}
+	return id, nil
 }
 
-func GetClientOrgMSP(ctx contractapi.TransactionContextInterface) string {
-	orgMSP, _ := ctx.GetClientIdentity().GetMSPID()
-	return orgMSP
-
+func GetClientOrgMSP(ctx contractapi.TransactionContextInterface) (string, error) {
+	orgMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get client MSP ID: %v", err)
+	}
+	return orgMSP, nil
 }
 
 func (s *SmartContract) LoadLockPolicy(
@@ -40,12 +58,14 @@ func (s *SmartContract) LoadLockPolicy(
 	version int,
 ) (*LockPolicy, error) {
 
-	key := fmt.Sprintf(
-		"LOCKPOLICY_%s_%s_v%d",
-		orgMSP,
-		policyID,
-		version,
-	)
+	// IMPROVEMENT: Use CreateCompositeKey for safer key generation.
+	// This handles delimiters automatically to prevent key collisions.
+	// Note: If you have existing data using the old "LOCKPOLICY_..." format,
+	// you must migrate it or stick to the old format.
+	key, err := ctx.GetStub().CreateCompositeKey("LOCKPOLICY", []string{orgMSP, policyID, fmt.Sprintf("v%d", version)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create composite key: %v", err)
+	}
 
 	data, err := ctx.GetStub().GetState(key)
 	if err != nil {

@@ -1,10 +1,8 @@
 package main
 
-import "encoding/json"
-
 type Status struct {
 	Code      string `json:code`
-	Note      string `json:"note,omitempty"`
+	Note      string `json:"note"`
 	UpdatedAt string `json:"updatedAt"`
 }
 
@@ -13,11 +11,14 @@ type LedgerRecord struct {
 	Actor     Actor  `json:"actor"`
 	CreatedAt string `json:"createdAt"`
 
-	BusinessData json.RawMessage `json:"businessData"`
+	// This tells the schema it can be "Any" type (object), preventing the "Expected array" error.
+	BusinessData interface{} `json:"businessData"`
 
-	Status   Status `json:"status"`
-	Locked   bool   `json:"locked"`
-	LockedAt string `json:"lockedAt,omitempty"`
+	Status Status `json:"status"`
+	Locked bool   `json:"locked"`
+
+	// This ensures the field is always present in the JSON (as ""), satisfying the "required" check.
+	LockedAt string `json:"lockedAt"`
 
 	LockPolicyID  string `json:"lockPolicyId"`
 	PolicyVersion int    `json:"policyVersion"`

@@ -25,7 +25,17 @@ func main() {
 	}
 }
 
-func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface, RecordID string, businessdata []byte) (*LedgerRecord, error) {
+func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface,
+	RecordID string,
+	businessdata string) (*LedgerRecord, error) {
+	businessdataBytes := []byte(businessdata)
+
+	// Validate and Unmarshal the input string into a generic interface map
+	var bizDataInterface interface{}
+	if err := json.Unmarshal(businessdataBytes, &bizDataInterface); err != nil {
+		return nil, fmt.Errorf("businessData must be valid JSON")
+	}
+
 	// 1. Ceck if order already exists
 	exists, err := s.OrderExists(ctx, RecordID)
 	if err != nil {
@@ -35,23 +45,25 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 		return nil, fmt.Errorf("order  %s already exists", RecordID)
 	}
 	// 1.check permission
-	isAuthorized, err := CheckPermissionClientOrgID(ctx, "role", "record_creator")
+	err = AssertClientAttribute(ctx, "role", "record_creator")
 
 	// Check for system errors or denial
 	if err != nil {
 		return nil, err // Returns: "authorization failed for attribute 'role': ..."
 	}
 
-	// Double check boolean (redundant if err handles it, but good for safety)
-	if !isAuthorized {
-		return nil, fmt.Errorf("access denied")
-	}
-	if !json.Valid(businessdata) {
+	if !json.Valid(businessdataBytes) {
 		return nil, fmt.Errorf("businessData must be valid JSON")
 	}
 
-	clientUserOrg := GetClientIdentity(ctx)
-	mspOrg := GetClientOrgMSP(ctx)
+	clientUserOrg, err := GetClientIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mspOrg, err := GetClientOrgMSP(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	timestamp, err := s.getTxTimestamp(ctx)
 	if err != nil {
@@ -70,7 +82,7 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 		RecordID:     RecordID,
 		Actor:        actor,
 		CreatedAt:    timestamp,
-		BusinessData: businessdata,
+		BusinessData: bizDataInterface,
 		Status:       Status{Code: "CREATED"}, // Default initial status
 		Locked:       false,
 	}
@@ -93,8 +105,10 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 func (s *SmartContract) UpdateBusinessData(
 	ctx contractapi.TransactionContextInterface,
 	recordID string,
-	newBusinessData []byte,
+	newBusinessData string,
 ) error {
+	// Convert the string input to bytes for processing
+	businessDataBytes := []byte(newBusinessData)
 
 	// 1. Read record
 	record, err := s.ReadRecord(ctx, recordID)
@@ -108,21 +122,21 @@ func (s *SmartContract) UpdateBusinessData(
 	}
 
 	// 3. Permission check
-	isAuthorized, err := CheckPermissionClientOrgID(ctx, "role", "record_editor")
+	err = AssertClientAttribute(ctx, "role", "record_editor")
 	if err != nil {
 		return err
 	}
-	if !isAuthorized {
-		return fmt.Errorf("access denied")
-	}
 
 	// 4. Validate JSON
-	if !json.Valid(newBusinessData) {
+	if !json.Valid(businessDataBytes) {
 		return fmt.Errorf("businessData must be valid JSON")
 	}
 
 	// 5. Optional: enforce same org ownership
-	callerOrg := GetClientOrgMSP(ctx)
+	callerOrg, err := GetClientOrgMSP(ctx)
+	if err != nil {
+		return err
+	}
 	if record.Actor.OrgMSP != callerOrg {
 		return fmt.Errorf("organization %s cannot modify record owned by %s",
 			callerOrg, record.Actor.OrgMSP)
@@ -174,16 +188,16 @@ func (s *SmartContract) UpdateRecordStatus(
 	}
 
 	// 3. Permission check
-	isAuthorized, err := CheckPermissionClientOrgID(ctx, "role", "status_updater")
+	err = AssertClientAttribute(ctx, "role", "status_updater")
 	if err != nil {
 		return err
 	}
-	if !isAuthorized {
-		return fmt.Errorf("access denied")
-	}
 
 	// 4. Optional: same org rule
-	callerOrg := GetClientOrgMSP(ctx)
+	callerOrg, err := GetClientOrgMSP(ctx)
+	if err != nil {
+		return err
+	}
 	if record.Actor.OrgMSP != callerOrg {
 		return fmt.Errorf(
 			"organization %s cannot update status of record owned by %s",
@@ -214,16 +228,16 @@ func (s *SmartContract) CreateLockPolicy(
 ) (*LockPolicy, error) {
 
 	// 1️⃣ Permission check (ORG ADMIN ONLY)
-	isAuthorized, err := CheckPermissionClientOrgID(ctx, "role", "org_admin")
+	err := AssertClientAttribute(ctx, "role", "org_admin")
 	if err != nil {
 		return nil, err
 	}
-	if !isAuthorized {
-		return nil, fmt.Errorf("access denied: org_admin role required")
-	}
 
 	// 2️⃣ Identify organization
-	orgMSP := GetClientOrgMSP(ctx)
+	orgMSP, err := GetClientOrgMSP(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// 3️⃣ Find latest policy version
 	latestVersion := 0
