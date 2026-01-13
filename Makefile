@@ -61,8 +61,8 @@ help:
 	@echo "  rollback        Rollback a record (Usage: make rollback REC_ID=... TARGET_TIME=...)"
 	@echo "  start           Start network, create channel, and deploy chaincode"
 	@echo "  history         View history of a record (Usage: make history REC_ID=...)"
-	@echo "  init            Initialize ledger with dummy data"
 	@echo "  create          Create a new record manually (Usage: make create REC_ID=... DESC=... STATUS=...)"
+	@echo "  create-file     Create record from JSON file (Usage: make create-file REC_ID=... FILE=...)"
 
 env-org1:
 	@echo "export PATH=$(BIN_DIR):\$$PATH"
@@ -195,62 +195,43 @@ export-certs:
 	tar -czf client-certs.tar.gz -C $(TEST_NETWORK) organizations
 	@echo "Created client-certs.tar.gz. Copy this file to your remote device."
 
-# Query the history of a record
+# Query History
+# Redirects logs to stderr (>2) so you can pipe the JSON output to jq
 history:
-	@if [ -z "$(REC_ID)" ]; then \
-		echo "Error: REC_ID must be set"; \
-		echo "Usage: make history REC_ID=REC001"; \
+	@if [ -z "$(REC_ID)" ]; then echo "Error: REC_ID must be set" >&2; exit 1; fi
+	@echo "Fetching history for record $(REC_ID)..." >&2
+	@export PATH=$(BIN_DIR):$$PATH && \
+	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
+	export CORE_PEER_TLS_ENABLED=true && \
+	peer chaincode query -C $(CHANNEL_NAME) -n $(CC_NAME) \
+		-c '{"function":"GetRecordHistory","Args":["$(REC_ID)", "$(START)", "$(END)"]}'
+
+# Query records by Date Range (Rich Query)
+# Usage: make query-range START="2026-01-01T00:00:00Z" END="2026-12-31T23:59:59Z"
+query-range:
+	@if [ -z "$(START)" ] || [ -z "$(END)" ]; then \
+		echo "Error: START and END must be set (RFC3339 format)" >&2; \
 		exit 1; \
 	fi
+	@echo "🔍 Searching records between $(START) and $(END)..." >&2
 	@export PATH=$(BIN_DIR):$$PATH && \
 	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
 	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org1MSP && \
-	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
-	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
-	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
-	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=peer0.org1.example.com && \
-	peer chaincode query \
-		-C $(CHANNEL_NAME) \
-		-n $(CC_NAME) \
-		-c '{"function":"GetRecordHistory","Args":["$(REC_ID)"]}'
+	peer chaincode query -C $(CHANNEL_NAME) -n $(CC_NAME) \
+		-c '{"function":"GetRecordsByDateRange","Args":["$(START)", "$(END)"]}'
 
-# Initialize the ledger with dummy data
-init:
-	@echo "Initializing ledger with dummy data..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
-	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org1MSP && \
-	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
-	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
-	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
-	export CORE_PEER_TLS_SERVERHOSTOVERRIDE= && \
-	peer chaincode invoke \
-		-o $(ORDERER_HOST):$(ORDERER_PORT) \
-		--ordererTLSHostnameOverride orderer.example.com \
-		--tls --cafile "$(ORDERER_CA)" \
-		-C $(CHANNEL_NAME) \
-		-n $(CC_NAME) \
-		--peerAddresses $(ORG1_HOST):$(ORG1_PORT) --tlsRootCertFiles "$(ORG1_TLS_ROOT)" \
-		--peerAddresses $(ORG2_HOST):$(ORG2_PORT) --tlsRootCertFiles "$(ORG2_TLS_ROOT)" \
-		-c '{"function":"InitLedger","Args":[]}'
 
 # Create a new record manually
+# Usage: make create REC_ID=REC001 DESC="Item" STATUS=CREATED USER_NAME=creator1
+USER_NAME ?= Admin
 create:
 	@if [ -z "$(REC_ID)" ] || [ -z "$(DESC)" ] || [ -z "$(STATUS)" ]; then \
 		echo "Error: REC_ID, DESC, and STATUS must be set"; \
-		echo "Usage: make create REC_ID=REC005 DESC=\"New Item\" STATUS=CREATED"; \
 		exit 1; \
 	fi
-	@echo "Creating record $(REC_ID)..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
-	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org1MSP && \
-	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
-	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
-	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
+	@echo "👤 User: $(USER_NAME)"
+
+	@export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USER_NAME)@org1.example.com/msp && \
 	export CORE_PEER_TLS_SERVERHOSTOVERRIDE= && \
 	peer chaincode invoke \
 		-o $(ORDERER_HOST):$(ORDERER_PORT) \
@@ -262,28 +243,52 @@ create:
 		--peerAddresses $(ORG2_HOST):$(ORG2_PORT) --tlsRootCertFiles "$(ORG2_TLS_ROOT)" \
 		-c '{"function":"CreateRecord","Args":["$(REC_ID)", "$(DESC)", "$(STATUS)"]}'
 
-# Create a new admin user for Org1
-create-admin-user:
+# Create a new Network Admin using NodeOUs
+# Usage: make create-admin USERNAME=opsadmin PASSWORD=opspass
+create-admin:
 	@if [ -z "$(USERNAME)" ] || [ -z "$(PASSWORD)" ]; then \
 		echo "Error: USERNAME and PASSWORD must be set"; \
-		echo "Usage: make create-admin-user USERNAME=newadmin PASSWORD=password123"; \
 		exit 1; \
 	fi
-	@echo "1. Enrolling CA Bootstrap Admin..."
+	@echo "👤 Creating Admin: $(USERNAME)..."
+	
+	@# CRITICAL FIX: Explicitly export PATH so the shell finds fabric-ca-client
 	@export PATH=$(BIN_DIR):$$PATH && \
 	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
-	fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 --caname ca-org1 --tls.certfiles $(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem
-	@echo "2. Registering new user $(USERNAME)..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
-	fabric-ca-client register --caname ca-org1 --id.name $(USERNAME) --id.secret $(PASSWORD) --id.type admin --tls.certfiles $(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem
-	@echo "3. Enrolling new user $(USERNAME)..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	fabric-ca-client enroll -u https://$(USERNAME):$(PASSWORD)@localhost:7054 --caname ca-org1 --tls.certfiles $(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem --mspdir $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp
-	@echo "-----------------------------------------------------------------"
-	@echo "Identity created at: $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp"
-	@echo "To make this user a Node Admin (able to install chaincode/join channels), run:"
-	@echo "cp $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp/signcerts/cert.pem $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/msp/admincerts/$(USERNAME)-cert.pem"
+	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem && \
+	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp && \
+	\
+	echo "🔍 Checking for CA TLS Certificate..." && \
+	if [ ! -f "$$TLS_CERT_FILE" ]; then \
+		echo "❌ Error: CA TLS certificate not found at $$TLS_CERT_FILE"; \
+		echo "   👉 Did you start the network with the '-ca' flag? (e.g., ./network.sh up -ca)"; \
+		exit 1; \
+	fi && \
+	\
+	echo "1. Enrolling Bootstrap Admin (admin:adminpw) to get registrar permissions..." && \
+	fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 \
+		--caname ca-org1 \
+		--tls.certfiles "$$TLS_CERT_FILE" && \
+	\
+	echo "2. Registering new admin (type=admin)..." && \
+	(fabric-ca-client register \
+		--caname ca-org1 \
+		--id.name $(USERNAME) \
+		--id.secret $(PASSWORD) \
+		--id.type admin \
+		--tls.certfiles "$$TLS_CERT_FILE" || echo "   ⚠️  User likely already registered, proceeding...") && \
+	\
+	echo "3. Enrolling new admin..." && \
+	fabric-ca-client enroll \
+		-u https://$(USERNAME):$(PASSWORD)@localhost:7054 \
+		--caname ca-org1 \
+		--mspdir "$$USER_MSP_DIR" \
+		--tls.certfiles "$$TLS_CERT_FILE" && \
+	\
+	echo "4. Copying config.yaml (Enables NodeOU Admin recognition)..." && \
+	cp $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/msp/config.yaml "$$USER_MSP_DIR/config.yaml" && \
+	\
+	echo "✅ Admin Identity ready at: $$USER_MSP_DIR"
 
 
 # ==============================================================================
@@ -310,27 +315,20 @@ package-cc:
 
 # 2. Install the package on both Org1 and Org2
 install-cc:
-	@echo "⬇️  Installing chaincode on Org1..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
-	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org1MSP && \
+	@echo "⬇️  Installing on Org1..."
+	@export CORE_PEER_LOCALMSPID=Org1MSP && \
 	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
 	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
 	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
 	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=peer0.org1.example.com && \
-	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz
-
-	@echo "⬇️  Installing chaincode on Org2..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
-	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org2MSP && \
+	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
+	@echo "⬇️  Installing on Org2..."
+	@export CORE_PEER_LOCALMSPID=Org2MSP && \
 	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG2_TLS_ROOT) && \
 	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp && \
 	export CORE_PEER_ADDRESS=$(ORG2_HOST):$(ORG2_PORT) && \
 	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=peer0.org2.example.com && \
-	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz
+	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
 
 # 3. Approve the definition for both Orgs
 # Uses calculatepackageid to get the exact ID of the local tarball
@@ -390,24 +388,20 @@ commit-cc:
 
 # Create a new record using data from a file
 # Usage: make create-file REC_ID=REC003 FILE=data.json USER_NAME=creator1
+# Create a new record using data from a file
+# Usage: make create-file REC_ID=REC003 FILE=data.json USER_NAME=creator1
 create-file:
 	@if [ -z "$(REC_ID)" ] || [ -z "$(FILE)" ]; then \
 		echo "Error: REC_ID and FILE must be set"; \
 		exit 1; \
 	fi
-	@echo "--------------------------------------------------"
 	@echo "📄 Reading data from: $(FILE)"
-	@# Read file, remove newlines, and escape quotes for the CLI
 	@$(eval JSON_DATA := $(shell cat $(FILE) | tr -d '\n' | sed 's/"/\\"/g'))
-	@echo "--------------------------------------------------"
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
-	export CORE_PEER_TLS_ENABLED=true && \
-	export CORE_PEER_LOCALMSPID=Org1MSP && \
-	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
-	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
-	export CORE_PEER_TLS_SERVERHOSTOVERRIDE= && \
+	@# We explicitly export FABRIC_CFG_PATH and PATH in this chain to guarantee peer finds the config
+	@export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
+	export PATH=$(BIN_DIR):$$PATH && \
 	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USER_NAME)@org1.example.com/msp && \
+	export CORE_PEER_TLS_SERVERHOSTOVERRIDE= && \
 	peer chaincode invoke \
 		-o $(ORDERER_HOST):$(ORDERER_PORT) \
 		--ordererTLSHostnameOverride orderer.example.com \
@@ -417,3 +411,45 @@ create-file:
 		--peerAddresses $(ORG1_HOST):$(ORG1_PORT) --tlsRootCertFiles "$(ORG1_TLS_ROOT)" \
 		--peerAddresses $(ORG2_HOST):$(ORG2_PORT) --tlsRootCertFiles "$(ORG2_TLS_ROOT)" \
 		-c '{"function":"CreateRecord","Args":["$(REC_ID)", "$(JSON_DATA)"]}'
+
+# ==============================================================================
+# 5. USER MANAGEMENT
+# ==============================================================================
+
+# Create or Restore a User Identity
+# Usage: make create-user USERNAME=creator1 PASSWORD=creator1pw ROLE=record_creator
+create-user:
+	@if [ -z "$(USERNAME)" ] || [ -z "$(PASSWORD)" ]; then \
+		echo "Error: USERNAME and PASSWORD must be set"; \
+		echo "Usage: make create-user USERNAME=creator1 PASSWORD=secret [ROLE=record_creator]"; \
+		exit 1; \
+	fi
+	@echo "👤 Processing user: $(USERNAME)..."
+	
+	@# 1. Setup Environment Variables for CA Client
+	@export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
+	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem && \
+	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp && \
+	\
+	echo "   Target MSP Directory: $$USER_MSP_DIR" && \
+	\
+	echo "1. Registering user (ignoring error if already exists)..." && \
+	(fabric-ca-client register \
+		--caname ca-org1 \
+		--id.name $(USERNAME) \
+		--id.secret $(PASSWORD) \
+		--id.type client \
+		--id.attrs 'role=$(ROLE):ecert' \
+		--tls.certfiles "$$TLS_CERT_FILE" || echo "   ⚠️  User likely already registered, proceeding to enroll...") && \
+	\
+	echo "2. Enrolling user..." && \
+	fabric-ca-client enroll \
+		-u https://$(USERNAME):$(PASSWORD)@localhost:7054 \
+		--caname ca-org1 \
+		--mspdir "$$USER_MSP_DIR" \
+		--tls.certfiles "$$TLS_CERT_FILE" && \
+	\
+	echo "3. Copying config.yaml for NodeOUs..." && \
+	cp $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/msp/config.yaml "$$USER_MSP_DIR/config.yaml" && \
+	\
+	echo "✅ Identity for $(USERNAME) is ready!"

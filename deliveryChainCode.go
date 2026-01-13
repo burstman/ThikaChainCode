@@ -385,36 +385,134 @@ func (s *SmartContract) GetLockPoliciesByOrg(
 	return policies, nil
 }
 
+// GetRecordHistory returns the history of a record within a specific time interval.
+// Pass empty strings "" for startStr or endStr to ignore that boundary.
+// Date Format: RFC3339 (e.g., "2024-01-01T00:00:00Z")
 func (s *SmartContract) GetRecordHistory(
 	ctx contractapi.TransactionContextInterface,
 	recordID string,
+	startStr string,
+	endStr string,
 ) ([]HistoryEntry, error) {
 
+	// 1. Parse Time Filters
+	var startTime, endTime time.Time
+	var err error
+
+	// Parse Start Time if provided
+	if startStr != "" {
+		startTime, err = time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start time format (use RFC3339, e.g., 2024-01-01T00:00:00Z): %v", err)
+		}
+	}
+
+	// Parse End Time if provided
+	if endStr != "" {
+		endTime, err = time.Parse(time.RFC3339, endStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
+		}
+	}
+
+	// 2. Get History Iterator
 	it, err := ctx.GetStub().GetHistoryForKey(recordID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get history for key %s: %w", recordID, err)
 	}
 	defer it.Close()
 
-	var history []HistoryEntry
+	// Initialize empty slice for consistent JSON output
+	history := []HistoryEntry{}
 
+	// 3. Iterate and Filter
 	for it.HasNext() {
-		r, _ := it.Next()
-
-		var record LedgerRecord
-		if r.Value != nil {
-			_ = json.Unmarshal(r.Value, &record)
+		response, err := it.Next()
+		if err != nil {
+			return nil, fmt.Errorf("error iterating history: %w", err)
 		}
 
-		ts := time.Unix(r.Timestamp.Seconds, int64(r.Timestamp.Nanos))
+		// Convert Fabric Timestamp (seconds/nanos) to Go Time
+		txTime := time.Unix(response.Timestamp.Seconds, int64(response.Timestamp.Nanos)).UTC()
 
-		history = append(history, HistoryEntry{
-			TxID:      r.TxId,
-			Timestamp: ts.Format(time.RFC3339),
+		// Filter: Check Start Boundary
+		if !startTime.IsZero() && txTime.Before(startTime) {
+			continue
+		}
+
+		// Filter: Check End Boundary
+		if !endTime.IsZero() && txTime.After(endTime) {
+			continue
+		}
+
+		var record LedgerRecord
+		// Only unmarshal if not a delete operation
+		if response.Value != nil {
+			if err := json.Unmarshal(response.Value, &record); err != nil {
+				// Log error but maybe don't fail the whole query?
+				// For strictness, we return error here.
+				return nil, fmt.Errorf("failed to unmarshal history value: %w", err)
+			}
+		}
+
+		entry := HistoryEntry{
+			TxID:      response.TxId,
+			Timestamp: txTime, // Return time.Time object
 			Value:     &record,
-		})
+			IsDelete:  response.IsDelete,
+		}
+		history = append(history, entry)
 	}
+
 	return history, nil
+}
+
+// GetRecordsByDateRange performs a rich query to find records created within a time range.
+// Dates must be in RFC3339 format (e.g., "2026-01-12T12:00:00Z").
+func (s *SmartContract) GetRecordsByDateRange(ctx contractapi.TransactionContextInterface, startStr string, endStr string) ([]*LedgerRecord, error) {
+
+	// 1. Validate Input Dates
+	if _, err := time.Parse(time.RFC3339, startStr); err != nil {
+		return nil, fmt.Errorf("invalid start time format (use RFC3339): %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, endStr); err != nil {
+		return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
+	}
+
+	// 2. Construct CouchDB Query String
+	// We use $gte (Greater Than or Equal) and $lte (Less Than or Equal)
+	queryString := fmt.Sprintf(`{
+		"selector": {
+			"createdAt": {
+				"$gte": "%s",
+				"$lte": "%s"
+			}
+		}
+	}`, startStr, endStr)
+
+	// 3. Execute Query
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	// 4. Iterate and Parse Results
+	var records []*LedgerRecord
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var record LedgerRecord
+		if err := json.Unmarshal(queryResponse.Value, &record); err != nil {
+			return nil, err
+		}
+		records = append(records, &record)
+	}
+
+	return records, nil
 }
 
 func (s *SmartContract) EnforceLockPolicy(

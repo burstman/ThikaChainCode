@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type Status struct {
 	Code      string `json:code`
 	Note      string `json:"note"`
@@ -39,8 +41,10 @@ type LockPolicy struct {
 	Active       bool   `json:"active"`
 }
 
+// HistoryEntry defines the structure for a single history record.
 type HistoryEntry struct {
 	TxID      string        `json:"txId"`
-	Timestamp string        `json:"timestamp"`
+	Timestamp time.Time     `json:"timestamp"`
 	Value     *LedgerRecord `json:"value"`
+	IsDelete  bool          `json:"isDelete"`
 }
