@@ -431,38 +431,28 @@ create-user:
 		exit 1; \
 	fi
 	@echo "👤 Processing user: $(USERNAME)..."
-	
-	@# 1. Setup Environment and ensure binaries are found
 	@export PATH=$(BIN_DIR):$$PATH && \
 	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
 	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem && \
 	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp && \
 	\
-	echo "🔍 Checking for CA TLS Certificate..." && \
-	if [ ! -f "$$TLS_CERT_FILE" ]; then \
-		echo "❌ Error: CA TLS certificate not found at $$TLS_CERT_FILE"; \
-		echo "   👉 Did you start the network with the '-ca' flag?"; \
-		exit 1; \
-	fi && \
-	\
-	echo "1. Enrolling Bootstrap Admin (to get registrar permissions)..." && \
+	echo "1. Enrolling Bootstrap Admin..." && \
 	fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 \
 		--caname ca-org1 \
 		--tls.certfiles "$$TLS_CERT_FILE" && \
 	\
-	echo "2. Registering user (type=client)..." && \
-	# Conditionally add attributes only if ROLE is provided
-	ATTRS_ARG="" && \
+	echo "2. Registering user..." && \
+	ATTRS_FLAG="" && \
 	if [ -n "$(ROLE)" ]; then \
-		ATTRS_ARG="--id.attrs 'role=$(ROLE):ecert'"; \
+		ATTRS_FLAG="--id.attrs \"role=$(ROLE):ecert\""; \
 	fi && \
 	(fabric-ca-client register \
 		--caname ca-org1 \
 		--id.name $(USERNAME) \
 		--id.secret $(PASSWORD) \
 		--id.type client \
-		$$ATTRS_ARG \
-		--tls.certfiles "$$TLS_CERT_FILE" || echo "   ⚠️  User likely already registered, proceeding...") && \
+		$$ATTRS_FLAG \
+		--tls.certfiles "$$TLS_CERT_FILE" || echo "   ⚠️  User likely already registered. Proceeding to enrollment...") && \
 	\
 	echo "3. Enrolling user..." && \
 	fabric-ca-client enroll \
@@ -471,7 +461,7 @@ create-user:
 		--mspdir "$$USER_MSP_DIR" \
 		--tls.certfiles "$$TLS_CERT_FILE" && \
 	\
-	echo "4. Copying config.yaml for NodeOUs..." && \
+	echo "4. Copying config.yaml..." && \
 	cp $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/msp/config.yaml "$$USER_MSP_DIR/config.yaml" && \
 	\
 	echo "✅ Identity for $(USERNAME) is ready!"
