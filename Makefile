@@ -422,7 +422,7 @@ create-file:
 # 5. USER MANAGEMENT
 # ==============================================================================
 
-# Create or Restore a User Identity
+# Create or Restore a User Identity for the CURRENTLY ACTIVE organization
 # Usage: make create-user USERNAME=creator1 PASSWORD=secret [ROLE=record_creator]
 create-user:
 	@if [ -z "$(USERNAME)" ] || [ -z "$(PASSWORD)" ]; then \
@@ -430,24 +430,39 @@ create-user:
 		echo "Usage: make create-user USERNAME=creator1 PASSWORD=secret [ROLE=record_creator]"; \
 		exit 1; \
 	fi
-	@echo "👤 Processing user: $(USERNAME)..."
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
-	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem && \
-	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp && \
+	@# 1. Determine Org details based on the environment variable
+	@if [ "$$CORE_PEER_LOCALMSPID" = "Org1MSP" ]; then \
+		ORG_NAME="org1"; \
+		CA_NAME="ca-org1"; \
+		CA_PORT="7054"; \
+	elif [ "$$CORE_PEER_LOCALMSPID" = "Org2MSP" ]; then \
+		ORG_NAME="org2"; \
+		CA_NAME="ca-org2"; \
+		CA_PORT="8054"; \
+	else \
+		echo "Error: CORE_PEER_LOCALMSPID is not set. Run 'eval \$$(make env-org1)' or 'eval \$$(make env-org2)' first." >&2; \
+		exit 1; \
+	fi; \
+	\
+	echo "👤 Processing user: $(USERNAME) for $$ORG_NAME..." && \
+	\
+	export PATH=$(BIN_DIR):$$PATH; \
+	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/$$ORG_NAME.example.com/; \
+	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/$$ORG_NAME/tls-cert.pem; \
+	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/$$ORG_NAME.example.com/users/$(USERNAME)@$$ORG_NAME.example.com/msp; \
 	\
 	echo "1. Enrolling Bootstrap Admin..." && \
-	fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 \
-		--caname ca-org1 \
+	fabric-ca-client enroll -u https://admin:adminpw@localhost:$$CA_PORT \
+		--caname $$CA_NAME \
 		--tls.certfiles "$$TLS_CERT_FILE" && \
 	\
 	echo "2. Registering user..." && \
-	ATTRS_FLAG="" && \
+	ATTRS_FLAG=""; \
 	if [ -n "$(ROLE)" ]; then \
-		ATTRS_FLAG="--id.attrs \"role=$(ROLE):ecert\""; \
-	fi && \
+		ATTRS_FLAG="--id.attrs role=$(ROLE):ecert"; \
+	fi; \
 	(fabric-ca-client register \
-		--caname ca-org1 \
+		--caname $$CA_NAME \
 		--id.name $(USERNAME) \
 		--id.secret $(PASSWORD) \
 		--id.type client \
@@ -456,15 +471,15 @@ create-user:
 	\
 	echo "3. Enrolling user..." && \
 	fabric-ca-client enroll \
-		-u https://$(USERNAME):$(PASSWORD)@localhost:7054 \
-		--caname ca-org1 \
+		-u https://$(USERNAME):$(PASSWORD)@localhost:$$CA_PORT \
+		--caname $$CA_NAME \
 		--mspdir "$$USER_MSP_DIR" \
 		--tls.certfiles "$$TLS_CERT_FILE" && \
 	\
 	echo "4. Copying config.yaml..." && \
-	cp $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/msp/config.yaml "$$USER_MSP_DIR/config.yaml" && \
+	cp $(TEST_NETWORK)/organizations/peerOrganizations/$$ORG_NAME.example.com/msp/config.yaml "$$USER_MSP_DIR/config.yaml" && \
 	\
-	echo "✅ Identity for $(USERNAME) is ready!"
+	echo "✅ Identity for $(USERNAME) in $$ORG_NAME is ready!"
 
 
 # List all registered users for the CURRENTLY ACTIVE organization
@@ -521,7 +536,7 @@ list-users:
 # 6. IDENTITY MANAGEMENT
 # ==============================================================================
 
-# Add an attribute to an existing user and re-enroll
+# Add an attribute to an existing user and re-enroll (Dynamic for Org1/Org2)
 # Usage: make add-attribute USERNAME=hamed PASSWORD=pass ATTRS="role=record_creator"
 add-attribute:
 	@if [ -z "$(USERNAME)" ] || [ -z "$(PASSWORD)" ] || [ -z "$(ATTRS)" ]; then \
@@ -529,13 +544,26 @@ add-attribute:
 		echo "Usage: make add-attribute USERNAME=hamed PASSWORD=pass ATTRS=\"role=record_creator\""; \
 		exit 1; \
 	fi
-	@echo "🔄 Adding attribute '$(ATTRS)' to user '$(USERNAME)'..."
-	
-	@# Explicitly export PATH to ensure fabric-ca-client is found
-	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/ && \
-	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/org1/tls-cert.pem && \
-	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/$(USERNAME)@org1.example.com/msp && \
+	@# 1. Determine Org details based on the environment variable
+	@if [ "$$CORE_PEER_LOCALMSPID" = "Org1MSP" ]; then \
+		ORG_NAME="org1"; \
+		CA_NAME="ca-org1"; \
+		CA_PORT="7054"; \
+	elif [ "$$CORE_PEER_LOCALMSPID" = "Org2MSP" ]; then \
+		ORG_NAME="org2"; \
+		CA_NAME="ca-org2"; \
+		CA_PORT="8054"; \
+	else \
+		echo "Error: CORE_PEER_LOCALMSPID is not set. Run 'eval \$$(make env-org1)' or 'eval \$$(make env-org2)' first." >&2; \
+		exit 1; \
+	fi; \
+	\
+	echo "🔄 Adding attribute '$(ATTRS)' to user '$(USERNAME)' in $$ORG_NAME..." && \
+	\
+	export PATH=$(BIN_DIR):$$PATH; \
+	export FABRIC_CA_CLIENT_HOME=$(TEST_NETWORK)/organizations/peerOrganizations/$$ORG_NAME.example.com/; \
+	export TLS_CERT_FILE=$(TEST_NETWORK)/organizations/fabric-ca/$$ORG_NAME/tls-cert.pem; \
+	export USER_MSP_DIR=$(TEST_NETWORK)/organizations/peerOrganizations/$$ORG_NAME.example.com/users/$(USERNAME)@$$ORG_NAME.example.com/msp; \
 	\
 	echo "1. Modifying identity in CA database..." && \
 	fabric-ca-client identity modify $(USERNAME) \
@@ -544,8 +572,8 @@ add-attribute:
 	\
 	echo "2. Re-enrolling to generate new certificate..." && \
 	fabric-ca-client enroll \
-		-u https://$(USERNAME):$(PASSWORD)@localhost:7054 \
-		--caname ca-org1 \
+		-u https://$(USERNAME):$(PASSWORD)@localhost:$$CA_PORT \
+		--caname $$CA_NAME \
 		--mspdir "$$USER_MSP_DIR" \
 		--tls.certfiles "$$TLS_CERT_FILE" && \
 	\
