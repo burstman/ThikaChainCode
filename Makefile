@@ -579,3 +579,58 @@ add-attribute:
 	\
 	echo "✅ Attribute added! Verifying..." && \
 	openssl x509 -in "$$USER_MSP_DIR/signcerts/cert.pem" -text -noout | grep "$(ATTRS)" -A 1 || echo "⚠️  Warning: Attribute not found in grep check, please verify manually."
+
+# Create a new lock policy
+# Usage: make create-policy POLICY_ID=P01 VERSION=1 ACTIVE=true [ORG_MSP=Org1MSP]
+create-policy:
+	@if [ -z "$(POLICY_ID)" ] || [ -z "$(VERSION)" ] || [ -z "$(ACTIVE)" ]; then \
+		echo "Error: POLICY_ID, VERSION, and ACTIVE must be set" >&2; \
+		exit 1; \
+	fi
+	@# Logic: Use ORG_MSP arg if present, otherwise use Env Variable, otherwise fail
+	@TARGET_MSP="$(ORG_MSP)"; \
+	if [ -z "$$TARGET_MSP" ]; then \
+		TARGET_MSP="$$CORE_PEER_LOCALMSPID"; \
+	fi; \
+	if [ -z "$$TARGET_MSP" ]; then \
+		echo "Error: ORG_MSP not provided and CORE_PEER_LOCALMSPID not set." >&2; \
+		exit 1; \
+	fi; \
+	\
+	echo "Creating policy $(POLICY_ID) v$(VERSION) for $$TARGET_MSP..." >&2; \
+	\
+	export PATH=$(BIN_DIR):$$PATH; \
+	export FABRIC_CFG_PATH=$(CONFIG_DIR); \
+	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=; \
+	\
+	peer chaincode invoke \
+		-o $(ORDERER_HOST):$(ORDERER_PORT) \
+		--ordererTLSHostnameOverride orderer.example.com \
+		--tls --cafile "$(ORDERER_CA)" \
+		-C $(CHANNEL_NAME) \
+		-n $(CC_NAME) \
+		--peerAddresses $(ORG1_HOST):$(ORG1_PORT) --tlsRootCertFiles "$(ORG1_TLS_ROOT)" \
+		--peerAddresses $(ORG2_HOST):$(ORG2_PORT) --tlsRootCertFiles "$(ORG2_TLS_ROOT)" \
+		-c "{\"function\":\"CreateLockPolicy\",\"Args\":[\"$$TARGET_MSP\", \"$(POLICY_ID)\", \"$(VERSION)\", \"$(ACTIVE)\", \"Example Condition\"]}"
+
+# Get the currently active lock policy
+# Usage: make get-active-policy [ORG_MSP=Org1MSP]
+get-active-policy:
+	@# Logic: Use ORG_MSP arg if present, otherwise use Env Variable, otherwise fail
+	@TARGET_MSP="$(ORG_MSP)"; \
+	if [ -z "$$TARGET_MSP" ]; then \
+		TARGET_MSP="$$CORE_PEER_LOCALMSPID"; \
+	fi; \
+	if [ -z "$$TARGET_MSP" ]; then \
+		echo "Error: ORG_MSP not provided and CORE_PEER_LOCALMSPID not set." >&2; \
+		exit 1; \
+	fi; \
+	\
+	echo "Querying for active policy for $$TARGET_MSP..." >&2; \
+	\
+	export PATH=$(BIN_DIR):$$PATH; \
+	export FABRIC_CFG_PATH=$(CONFIG_DIR); \
+	export CORE_PEER_TLS_ENABLED=true; \
+	\
+	peer chaincode query -C $(CHANNEL_NAME) -n $(CC_NAME) \
+		-c "{\"function\":\"GetActiveLockPolicy\",\"Args\":[\"$$TARGET_MSP\"]}" | jq
