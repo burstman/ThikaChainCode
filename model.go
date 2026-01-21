@@ -31,16 +31,6 @@ type Actor struct {
 	UserID string `json:"userId"`
 }
 
-type LockPolicy struct {
-	PolicyID     string `json:"policyId"`
-	OrgMSP       string `json:"orgMsp"`
-	FinalState   string `json:"finalState"`
-	DelaySeconds int64  `json:"delaySeconds"`
-	Version      int    `json:"version"`
-	CreatedAt    string `json:"createdAt"`
-	Active       bool   `json:"active"`
-}
-
 // HistoryEntry defines the structure for a single history record.
 type HistoryEntry struct {
 	TxID      string        `json:"txId"`

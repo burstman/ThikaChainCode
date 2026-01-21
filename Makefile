@@ -315,7 +315,6 @@ package-cc:
 	@rm -f *.tar.gz
 	@echo "📦 Packaging chaincode version $(CC_VERSION)..."
 	@export PATH=$(BIN_DIR):$$PATH && \
-	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
 	peer lifecycle chaincode package $(CC_NAME)_$(CC_VERSION).tar.gz \
 		--path . --lang golang --label $(CC_NAME)_$(CC_VERSION)
 
@@ -323,10 +322,6 @@ package-cc:
 install-cc:
 	@echo "⬇️  Installing on Org1..."
 	@export CORE_PEER_LOCALMSPID=Org1MSP && \
-	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
-	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
-	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
-	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=peer0.org1.example.com && \
 	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
 	@echo "⬇️  Installing on Org2..."
 	@export CORE_PEER_LOCALMSPID=Org2MSP && \

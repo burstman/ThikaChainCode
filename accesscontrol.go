@@ -43,7 +43,7 @@ func GetClientIdentity(ctx contractapi.TransactionContextInterface) (string, err
 	return id, nil
 }
 
-func GetClientOrgMSP(ctx contractapi.TransactionContextInterface) (string, error) {
+func GetClientOrgMSPKey(ctx contractapi.TransactionContextInterface) (string, error) {
 	orgMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return "", fmt.Errorf("failed to get client MSP ID: %v", err)

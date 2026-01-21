@@ -60,7 +60,7 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 	if err != nil {
 		return nil, err
 	}
-	mspOrg, err := GetClientOrgMSP(ctx)
+	mspOrg, err := GetClientOrgMSPKey(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *SmartContract) UpdateBusinessData(
 	}
 
 	// 5. Optional: enforce same org ownership
-	callerOrg, err := GetClientOrgMSP(ctx)
+	callerOrg, err := GetClientOrgMSPKey(ctx)
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func (s *SmartContract) UpdateRecordStatus(
 	}
 
 	// 4. Optional: same org rule
-	callerOrg, err := GetClientOrgMSP(ctx)
+	callerOrg, err := GetClientOrgMSPKey(ctx)
 	if err != nil {
 		return err
 	}
