@@ -314,17 +314,22 @@ package-cc:
 	@echo "🧹 Cleaning up old package files..."
 	@rm -f *.tar.gz
 	@echo "📦 Packaging chaincode version $(CC_VERSION)..."
-	@export PATH=$(BIN_DIR):$$PATH && \
+	@export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
+    export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
+	export PATH=$(BIN_DIR):$$PATH && \
 	peer lifecycle chaincode package $(CC_NAME)_$(CC_VERSION).tar.gz \
 		--path . --lang golang --label $(CC_NAME)_$(CC_VERSION)
 
 # 2. Install the package on both Org1 and Org2
 install-cc:
 	@echo "⬇️  Installing on Org1..."
-	@export CORE_PEER_LOCALMSPID=Org1MSP && \
+	@export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
+	export CORE_PEER_LOCALMSPID=Org1MSP && \
 	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
+	
 	@echo "⬇️  Installing on Org2..."
-	@export CORE_PEER_LOCALMSPID=Org2MSP && \
+	@export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
+	export CORE_PEER_LOCALMSPID=Org2MSP && \
 	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG2_TLS_ROOT) && \
 	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp && \
 	export CORE_PEER_ADDRESS=$(ORG2_HOST):$(ORG2_PORT) && \
