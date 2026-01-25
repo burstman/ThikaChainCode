@@ -3,12 +3,13 @@ package main
 import "time"
 
 type Status struct {
-	Code      string `json:code`
+	Code      string `json:"code"`
 	Note      string `json:"note"`
 	UpdatedAt string `json:"updatedAt"`
 }
 
 type LedgerRecord struct {
+	DocType   string `json:"docType"` // e.g., "LedgerRecord"
 	RecordID  string `json:"recordId"`
 	Actor     Actor  `json:"actor"`
 	CreatedAt string `json:"createdAt"`
@@ -37,4 +38,11 @@ type HistoryEntry struct {
 	Timestamp time.Time     `json:"timestamp"`
 	Value     *LedgerRecord `json:"value"`
 	IsDelete  bool          `json:"isDelete"`
+}
+
+// PaginatedResponse wraps the results and the bookmark for the next page.
+type PaginatedResponse struct {
+	Records      []*LedgerRecord `json:"records"`
+	Bookmark     string          `json:"bookmark"`
+	RecordsCount int32           `json:"recordsCount"`
 }

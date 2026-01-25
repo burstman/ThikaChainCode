@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
@@ -51,20 +52,18 @@ func GetClientOrgMSPKey(ctx contractapi.TransactionContextInterface) (string, er
 	return orgMSP, nil
 }
 
+// Helper to load a specific historical policy version
 func (s *SmartContract) LoadLockPolicy(
 	ctx contractapi.TransactionContextInterface,
 	orgMSP string,
-	policyID string,
+	policyID string, // Likely redundant if ID == OrgMSP
 	version int,
 ) (*LockPolicy, error) {
 
-	// IMPROVEMENT: Use CreateCompositeKey for safer key generation.
-	// This handles delimiters automatically to prevent key collisions.
-	// Note: If you have existing data using the old "LOCKPOLICY_..." format,
-	// you must migrate it or stick to the old format.
-	key, err := ctx.GetStub().CreateCompositeKey("LOCKPOLICY", []string{orgMSP, policyID, fmt.Sprintf("v%d", version)})
+	// Construct key for specific version: LOCKPOLICY_Org1_1
+	key, err := ctx.GetStub().CreateCompositeKey(indexPolicy, []string{orgMSP, strconv.Itoa(version)})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create composite key: %v", err)
+		return nil, err
 	}
 
 	data, err := ctx.GetStub().GetState(key)
@@ -72,13 +71,13 @@ func (s *SmartContract) LoadLockPolicy(
 		return nil, err
 	}
 	if data == nil {
-		return nil, fmt.Errorf("lock policy not found")
+		return nil, fmt.Errorf("policy version %d not found", version)
 	}
 
 	var policy LockPolicy
-	if err := json.Unmarshal(data, &policy); err != nil {
+	err = json.Unmarshal(data, &policy)
+	if err != nil {
 		return nil, err
 	}
-
 	return &policy, nil
 }

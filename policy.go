@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
 // LockPolicy struct definition (assumed based on context)
 type LockPolicy struct {
+	DocType      string `json:"docType"` // e.g., "LockPolicy"
 	PolicyID     string `json:"policy_id"`
 	OrgMSP       string `json:"org_msp"`
 	FinalState   string `json:"final_state"`
@@ -101,6 +103,7 @@ func (s *SmartContract) CreateLockPolicy(
 	}
 
 	newPolicy := &LockPolicy{
+		DocType:      "LockPolicy",
 		PolicyID:     orgMSP,
 		OrgMSP:       orgMSP,
 		FinalState:   finalState,
@@ -235,4 +238,64 @@ func (s *SmartContract) saveLockPolicy(
 	}
 
 	return ctx.GetStub().PutState(key, policyBytes)
+}
+
+func (s *SmartContract) enforceLockPolicy(
+	ctx contractapi.TransactionContextInterface,
+	record *LedgerRecord,
+) error {
+
+	// 1. Optimization: If already locked, stop here.
+	if record.Locked {
+		return nil
+	}
+
+	// 2. Load the SPECIFIC policy version this record is tied to.
+	// We do NOT check if policy.Active is true. Historical policies must still be enforced.
+	policy, err := s.LoadLockPolicy(
+		ctx,
+		record.Actor.OrgMSP,
+		record.LockPolicyID,
+		record.PolicyVersion,
+	)
+	if err != nil {
+		return err
+	}
+
+	// 3. Check if the record is in the state that triggers the lock (e.g. "PENDING_APPROVAL")
+	if record.Status.Code != policy.FinalState {
+		return nil
+	}
+
+	// 4. Calculate Time
+	stateTime, err := time.Parse(time.RFC3339, record.Status.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to parse record time: %v", err)
+	}
+
+	txTimeStr, err := s.getTxTimestamp(ctx)
+	if err != nil {
+		return err
+	}
+	now, err := time.Parse(time.RFC3339, txTimeStr)
+	if err != nil {
+		return err
+	}
+
+	lockDelay := time.Duration(policy.DelaySeconds) * time.Second
+
+	// 5. Compare Time (Fixed syntax error here)
+	if now.Sub(stateTime) >= lockDelay {
+		record.Locked = true
+		record.LockedAt = txTimeStr
+
+		// Save the updated state
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return ctx.GetStub().PutState(record.RecordID, data)
+	}
+
+	return nil
 }

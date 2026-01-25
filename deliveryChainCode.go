@@ -30,33 +30,33 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 	businessdata string) (*LedgerRecord, error) {
 	businessdataBytes := []byte(businessdata)
 
-	// Validate and Unmarshal the input string into a generic interface map
-	var bizDataInterface interface{}
-	if err := json.Unmarshal(businessdataBytes, &bizDataInterface); err != nil {
-		return nil, fmt.Errorf("businessData must be valid JSON")
-	}
-
-	// 1. Ceck if order already exists
-	exists, err := s.OrderExists(ctx, RecordID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, fmt.Errorf("order  %s already exists", RecordID)
-	}
 	// 1.check permission
-	err = AssertClientAttribute(ctx, "role", "record_creator")
+	err := AssertClientAttribute(ctx, "role", "record_creator")
 
 	// Check for system errors or denial
 	if err != nil {
 		return nil, err // Returns: "authorization failed for attribute 'role': ..."
 	}
 
+	// 2. Check if order already exists
+	exists, err := s.OrderExists(ctx, RecordID)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("record  %s already exists", RecordID)
+	}
+	// Validate and Unmarshal the input string into a generic interface map
+	var bizDataInterface interface{}
+	if err := json.Unmarshal(businessdataBytes, &bizDataInterface); err != nil {
+		return nil, fmt.Errorf("businessData must be valid JSON")
+	}
+
 	if !json.Valid(businessdataBytes) {
 		return nil, fmt.Errorf("businessData must be valid JSON")
 	}
 
-	clientUserOrg, err := GetClientIdentity(ctx)
+	clientUserID, err := GetClientIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -71,14 +71,15 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 	}
 	actor := Actor{
 		OrgMSP: mspOrg,
-		UserID: clientUserOrg,
+		UserID: clientUserID,
 	}
 
 	// 2. Initialize the struct
 	// Note: We do not need to explicitly define the types for Delivery and Payment
 	// inside the literal if we are just using zero-values, but here is how
 	// you would initialize them if needed.
-	order := &LedgerRecord{
+	record := &LedgerRecord{
+		DocType:      "ledgerRecord",
 		RecordID:     RecordID,
 		Actor:        actor,
 		CreatedAt:    timestamp,
@@ -87,17 +88,17 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 		Locked:       false,
 	}
 
-	orderJSON, err := json.Marshal(order)
+	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 
-	err = ctx.GetStub().PutState(RecordID, orderJSON)
+	err = ctx.GetStub().PutState(RecordID, recordJSON)
 	if err != nil {
 		return nil, err
 	}
 
-	return order, nil
+	return record, nil
 }
 
 // UpdateBusinessData updates the business-specific data of a delivery record.
@@ -114,6 +115,14 @@ func (s *SmartContract) UpdateBusinessData(
 	record, err := s.ReadRecord(ctx, recordID)
 	if err != nil {
 		return err
+	}
+
+	// 2. ENFORCE POLICY
+	// Pass the record pointer. If EnforceLockPolicy determines it should be locked,
+	// it will set record.Locked = true on this specific object instance.
+	err = s.enforceLockPolicy(ctx, record)
+	if err != nil {
+		return fmt.Errorf("failed to enforce lock policy: %v", err)
 	}
 
 	// 2. Check lock
@@ -158,61 +167,47 @@ func (s *SmartContract) UpdateBusinessData(
 
 }
 
-// UpdateRecordStatus updates the status of an existing delivery record in the ledger.
-//
-// Parameters:
-//
-//	ctx    - the transaction context, which provides access to the world state.
-//	id     - the unique identifier of the delivery record to be updated.
-//	status - the new status string to assign to the record (e.g., "DELIVERED", "IN_TRANSIT").
-//
-// Returns:
-//
-//	error - returns an error if the record does not exist, validation fails, or writing to the ledger fails.
-func (s *SmartContract) UpdateRecordStatus(
+func (s *SmartContract) UpdateRecord(
 	ctx contractapi.TransactionContextInterface,
 	recordID string,
-	newStatusCode string,
-	note string,
+	status string, // Example argument
 ) error {
 
-	// 1. Read record
+	// 1️⃣ READ THE RECORD
+	// Fabric caches reads within a transaction, so this is performant.
 	record, err := s.ReadRecord(ctx, recordID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Locked records cannot change state
+	// 2️⃣ ENFORCE POLICY
+	// Pass the record pointer. If EnforceLockPolicy determines it should be locked,
+	// it will set record.Locked = true on this specific object instance.
+	err = s.enforceLockPolicy(ctx, record)
+	if err != nil {
+		return fmt.Errorf("failed to enforce lock policy: %v", err)
+	}
+
+	// 3️⃣ CHECK LOCK STATUS
+	// If EnforceLockPolicy just ran and determined time is up, record.Locked is now true.
 	if record.Locked {
-		return fmt.Errorf("record %s is locked and status cannot be changed", recordID)
+		// We return an error here.
+		// NOTE: In Fabric, returning an error aborts the transaction.
+		// This means the "Locked=true" change from step 2 is NOT saved to the ledger.
+		// This is acceptable for "Lazy Enforcement" because the next time someone tries
+		// to touch this record, EnforceLockPolicy will run again and block them again.
+		return fmt.Errorf("record %s is locked and cannot be updated", recordID)
 	}
 
-	// 3. Permission check
-	err = AssertClientAttribute(ctx, "role", "status_updater")
+	// 4️⃣ APPLY UPDATES
+	// If we are here, the record is safe to update.
+	record.Status.Code = status
+	record.Status.UpdatedAt, err = s.getTxTimestamp(ctx) // Update timestamp
 	if err != nil {
 		return err
 	}
 
-	// 4. Optional: same org rule
-	callerOrg, err := GetClientOrgMSPKey(ctx)
-	if err != nil {
-		return err
-	}
-	if record.Actor.OrgMSP != callerOrg {
-		return fmt.Errorf(
-			"organization %s cannot update status of record owned by %s",
-			callerOrg,
-			record.Actor.OrgMSP,
-		)
-	}
-
-	// 5. Update status
-	record.Status = Status{
-		Code: newStatusCode,
-		Note: note,
-	}
-
-	// 6. Persist
+	// 5️⃣ SAVE
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -221,10 +216,10 @@ func (s *SmartContract) UpdateRecordStatus(
 	return ctx.GetStub().PutState(recordID, recordJSON)
 }
 
-// GetRecordHistory returns the history of a record within a specific time interval.
+// GetRecordHistoryByID returns the history of a record within a specific time interval.
 // Pass empty strings "" for startStr or endStr to ignore that boundary.
 // Date Format: RFC3339 (e.g., "2024-01-01T00:00:00Z")
-func (s *SmartContract) GetRecordHistory(
+func (s *SmartContract) GetRecordHistoryByID(
 	ctx contractapi.TransactionContextInterface,
 	recordID string,
 	startStr string,
@@ -249,6 +244,13 @@ func (s *SmartContract) GetRecordHistory(
 		if err != nil {
 			return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
 		}
+	}
+	ledger, err := s.ReadRecord(ctx, recordID)
+
+	// ENFORCE POLICY ON CURRENT RECORD
+	err = s.enforceLockPolicy(ctx, ledger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enforce lock policy: %v", err)
 	}
 
 	// 2. Get History Iterator
@@ -281,7 +283,7 @@ func (s *SmartContract) GetRecordHistory(
 			continue
 		}
 
-		var record LedgerRecord
+		var record *LedgerRecord
 		// Only unmarshal if not a delete operation
 		if response.Value != nil {
 			if err := json.Unmarshal(response.Value, &record); err != nil {
@@ -294,7 +296,7 @@ func (s *SmartContract) GetRecordHistory(
 		entry := HistoryEntry{
 			TxID:      response.TxId,
 			Timestamp: txTime, // Return time.Time object
-			Value:     &record,
+			Value:     record,
 			IsDelete:  response.IsDelete,
 		}
 		history = append(history, entry)
@@ -303,9 +305,13 @@ func (s *SmartContract) GetRecordHistory(
 	return history, nil
 }
 
-// GetRecordsByDateRange performs a rich query to find records created within a time range.
-// Dates must be in RFC3339 format (e.g., "2026-01-12T12:00:00Z").
-func (s *SmartContract) GetRecordsByDateRange(ctx contractapi.TransactionContextInterface, startStr string, endStr string) ([]*LedgerRecord, error) {
+func (s *SmartContract) GetRecordsByDateRange(
+	ctx contractapi.TransactionContextInterface,
+	startStr string,
+	endStr string,
+	pageSize int32,
+	bookmark string,
+) (*PaginatedResponse, error) {
 
 	// 1. Validate Input Dates
 	if _, err := time.Parse(time.RFC3339, startStr); err != nil {
@@ -315,26 +321,38 @@ func (s *SmartContract) GetRecordsByDateRange(ctx contractapi.TransactionContext
 		return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
 	}
 
-	// 2. Construct CouchDB Query String
-	// We use $gte (Greater Than or Equal) and $lte (Less Than or Equal)
-	queryString := fmt.Sprintf(`{
-		"selector": {
-			"createdAt": {
-				"$gte": "%s",
-				"$lte": "%s"
-			}
-		}
-	}`, startStr, endStr)
+	// 2. Construct CouchDB Query
+	// We use a map to safely construct the JSON query string.
+	queryMap := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"docType": "ledgerRecord", // Ensure your CreateRecord sets this!
+			"createdAt": map[string]interface{}{
+				"$gte": startStr,
+				"$lte": endStr,
+			},
+		},
+		// OPTIONAL: To ensure consistent pagination, it is best practice to sort.
+		// However, this requires a CouchDB index on ["createdAt"].
+		// "sort": []map[string]string{{"createdAt": "asc"}},
+	}
 
-	// 3. Execute Query
-	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	queryBytes, err := json.Marshal(queryMap)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to construct query: %v", err)
+	}
+	queryString := string(queryBytes)
+
+	// 3. Execute Pagination
+	// This API returns the iterator and metadata (which contains the bookmark).
+	resultsIterator, responseMetadata, err := ctx.GetStub().GetQueryResultWithPagination(queryString, pageSize, bookmark)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute paginated query: %w", err)
 	}
 	defer resultsIterator.Close()
 
 	// 4. Iterate and Parse Results
-	var records []*LedgerRecord
+	records := []*LedgerRecord{}
+
 	for resultsIterator.HasNext() {
 		queryResponse, err := resultsIterator.Next()
 		if err != nil {
@@ -343,70 +361,23 @@ func (s *SmartContract) GetRecordsByDateRange(ctx contractapi.TransactionContext
 
 		var record LedgerRecord
 		if err := json.Unmarshal(queryResponse.Value, &record); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to unmarshal record: %w", err)
 		}
+
+		// 5. Apply Dynamic Policy (Lazy Enforcement)
+		// We run the policy check here so the frontend sees the *actual* effective state
+		// (e.g., Locked=true) even if the DB state is technically outdated.
+		_ = s.enforceLockPolicy(ctx, &record)
+
 		records = append(records, &record)
 	}
 
-	return records, nil
-}
-
-func (s *SmartContract) EnforceLockPolicy(
-	ctx contractapi.TransactionContextInterface,
-	recordID string,
-) error {
-
-	record, err := s.ReadRecord(ctx, recordID)
-	if err != nil {
-		return err
-	}
-
-	if record.Locked {
-		return nil
-	}
-
-	orgMSP := record.Actor.OrgMSP
-
-	policy, err := s.LoadLockPolicy(
-		ctx,
-		orgMSP,
-		record.LockPolicyID,
-		record.PolicyVersion,
-	)
-	if err != nil {
-		return err
-	}
-
-	if !policy.Active {
-		return nil
-	}
-
-	if record.Status.Code != policy.FinalState {
-		return nil
-	}
-
-	stateTime, err := time.Parse(time.RFC3339, record.Status.UpdatedAt)
-	if err != nil {
-		return err
-	}
-
-	txTime, err := s.getTxTimestamp(ctx)
-	if err != nil {
-		return err
-	}
-	now, _ := time.Parse(time.RFC3339, txTime)
-
-	lockDelay := time.Duration(policy.DelaySeconds) * time.Second
-
-	if now.Sub(stateTime) >= lockDelay {
-		record.Locked = true
-		record.LockedAt = txTime
-
-		data, _ := json.Marshal(record)
-		return ctx.GetStub().PutState(recordID, data)
-	}
-
-	return nil
+	// 6. Construct Response
+	return &PaginatedResponse{
+		Records:      records,
+		Bookmark:     responseMetadata.Bookmark,
+		RecordsCount: responseMetadata.FetchedRecordsCount,
+	}, nil
 }
 
 // ------------------- HELPER FUNCTIONS -------------------
