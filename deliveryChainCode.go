@@ -30,15 +30,7 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 	businessdata string) (*LedgerRecord, error) {
 	businessdataBytes := []byte(businessdata)
 
-	// 1.check permission
-	err := AssertClientAttribute(ctx, "role", "record_creator")
-
-	// Check for system errors or denial
-	if err != nil {
-		return nil, err // Returns: "authorization failed for attribute 'role': ..."
-	}
-
-	// 2. Check if order already exists
+	//  Check if order already exists
 	exists, err := s.OrderExists(ctx, RecordID)
 	if err != nil {
 		return nil, err
@@ -56,32 +48,31 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 		return nil, fmt.Errorf("businessData must be valid JSON")
 	}
 
-	clientUserID, err := GetClientIdentity(ctx)
-	if err != nil {
-		return nil, err
-	}
-	mspOrg, err := GetClientOrgMSPKey(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	timestamp, err := s.getTxTimestamp(ctx)
 	if err != nil {
 		return nil, err
 	}
-	actor := Actor{
-		OrgMSP: mspOrg,
-		UserID: clientUserID,
+	actor, err := s.getClientActor(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// 2. Initialize the struct
+	// check permission
+	err = AssertClientOrgAndAttribute(ctx, *actor, "role", "record_creator")
+
+	// Check for system errors or denial
+	if err != nil {
+		return nil, err // Returns: "authorization failed for attribute 'role': ..."
+	}
+
+	// Initialize the struct
 	// Note: We do not need to explicitly define the types for Delivery and Payment
 	// inside the literal if we are just using zero-values, but here is how
 	// you would initialize them if needed.
 	record := &LedgerRecord{
 		DocType:      "ledgerRecord",
 		RecordID:     RecordID,
-		Actor:        actor,
+		Actor:        *actor,
 		CreatedAt:    timestamp,
 		BusinessData: bizDataInterface,
 		Status:       Status{Code: "CREATED"}, // Default initial status
@@ -131,7 +122,7 @@ func (s *SmartContract) UpdateBusinessData(
 	}
 
 	// 3. Permission check
-	err = AssertClientAttribute(ctx, "role", "record_editor")
+	err = AssertClientOrgAndAttribute(ctx, record.Actor, "role", "record_editor")
 	if err != nil {
 		return err
 	}

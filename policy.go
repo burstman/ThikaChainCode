@@ -11,14 +11,14 @@ import (
 
 // LockPolicy struct definition (assumed based on context)
 type LockPolicy struct {
-	DocType      string `json:"docType"` // e.g., "LockPolicy"
+	DocType      string `json:"docType"` // e.g., "lockPolicy"
 	PolicyID     string `json:"policy_id"`
-	OrgMSP       string `json:"org_msp"`
 	FinalState   string `json:"final_state"`
 	DelaySeconds int64  `json:"delay_seconds"`
 	Version      int    `json:"version"`
 	CreatedAt    string `json:"created_at"` // Assuming string for timestamp
 	Active       bool   `json:"active"`
+	CreatedBy    Actor  `json:"createdBy"`
 }
 
 const (
@@ -32,21 +32,17 @@ func (s *SmartContract) CreateLockPolicy(
 	delaySeconds int64,
 ) (*LockPolicy, error) {
 
-	// 1️⃣ Permission check (ORG ADMIN ONLY)
-	err := AssertClientAttribute(ctx, "role", "org_admin")
+	actor, err := s.getClientActor(ctx)
+
+	//  Permission check (ORG ADMIN ONLY)
+	err = AssertClientOrgAndAttribute(ctx, *actor, "role", "org_admin")
 	if err != nil {
 		return nil, err
 	}
 
-	// 2️⃣ Identify organization
-	orgMSP, err := GetClientOrgMSPKey(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3️⃣ Get the "Head Pointer" (Current Version)
+	// Get the "Head Pointer" (Current Version)
 	// This replaces the expensive loop. We look up one specific key.
-	headKey, err := ctx.GetStub().CreateCompositeKey(indexPolicyHead, []string{orgMSP})
+	headKey, err := ctx.GetStub().CreateCompositeKey(indexPolicyHead, []string{actor.OrgMSP})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create head key: %v", err)
 	}
@@ -66,11 +62,11 @@ func (s *SmartContract) CreateLockPolicy(
 		}
 	}
 
-	// 4️⃣ Deactivate the *current* policy before creating the new one
+	// Deactivate the *current* policy before creating the new one
 	// We only do this if a version actually exists (version > 0)
 	if currentVersion > 0 {
 		// Reconstruct the key for the current active policy
-		oldPolicyKey, err := ctx.GetStub().CreateCompositeKey(indexPolicy, []string{orgMSP, fmt.Sprintf("%d", currentVersion)})
+		oldPolicyKey, err := ctx.GetStub().CreateCompositeKey(indexPolicy, []string{actor.OrgMSP, fmt.Sprintf("%d", currentVersion)})
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +91,7 @@ func (s *SmartContract) CreateLockPolicy(
 		}
 	}
 
-	// 5️⃣ Create the NEW policy
+	// Create the NEW policy
 	newVersion := currentVersion + 1
 	timestamp, err := s.getTxTimestamp(ctx)
 	if err != nil {
@@ -104,12 +100,12 @@ func (s *SmartContract) CreateLockPolicy(
 
 	newPolicy := &LockPolicy{
 		DocType:      "LockPolicy",
-		PolicyID:     orgMSP,
-		OrgMSP:       orgMSP,
+		PolicyID:     actor.OrgMSP,
 		FinalState:   finalState,
 		DelaySeconds: delaySeconds,
 		Version:      newVersion,
 		CreatedAt:    timestamp,
+		CreatedBy:    *actor,
 		Active:       true,
 	}
 
@@ -118,7 +114,7 @@ func (s *SmartContract) CreateLockPolicy(
 		return nil, fmt.Errorf("failed to save new lock policy: %v", err)
 	}
 
-	// 6️⃣ Update the Head Pointer
+	// Update the Head Pointer
 	// Save the new version number back to the head key so the next transaction knows where to start.
 	newHeadBytes, _ := json.Marshal(newVersion)
 	err = ctx.GetStub().PutState(headKey, newHeadBytes)
@@ -154,7 +150,9 @@ func (s *SmartContract) GetActiveLockPolicy(
 	}
 
 	var latestVersion int
-	json.Unmarshal(headBytes, &latestVersion)
+	if err := json.Unmarshal(headBytes, &latestVersion); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal policy head version for org %s: %v", orgMSP, err)
+	}
 
 	// 2. Get the specific policy directly (O(1) lookup)
 	policyKey, err := ctx.GetStub().CreateCompositeKey(indexPolicy, []string{orgMSP, strconv.Itoa(latestVersion)})
@@ -184,22 +182,51 @@ func (s *SmartContract) GetActiveLockPolicy(
 	return &p, nil
 }
 
+// GetLockPoliciesByOrg finds all historical policy versions for an organization within a given date range.
+// This uses a CouchDB rich query for efficient, database-side filtering.
 func (s *SmartContract) GetLockPoliciesByOrg(
 	ctx contractapi.TransactionContextInterface,
 	orgMSP string,
+	startStr string, // e.g., "2024-01-01T00:00:00Z"
+	endStr string, // e.g., "2024-12-31T23:59:59Z"
 ) ([]LockPolicy, error) {
 
-	resultsIterator, err := ctx.GetStub().GetStateByPartialCompositeKey(
-		indexPolicy,
-		[]string{orgMSP},
-	)
+	// 1. Validate Input Dates
+	startTime, err := time.Parse(time.RFC3339, startStr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid start time format (use RFC3339): %v", err)
+	}
+	endTime, err := time.Parse(time.RFC3339, endStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
+	}
+	if startTime.After(endTime) {
+		return nil, fmt.Errorf("start time must be before end time")
+	}
+
+	// 2. Construct CouchDB Query String
+	// This query finds documents that match the docType, policy_id, and fall within the date range.
+	queryString := fmt.Sprintf(`{
+		"selector": {
+			"docType": "LockPolicy",
+			"policy_id": "%s",
+			"created_at": {
+				"$gte": "%s",
+				"$lte": "%s"
+			}
+		},
+		"sort": [{"created_at": "asc"}]
+	}`, orgMSP, startStr, endStr)
+
+	// 3. Execute Query
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	defer resultsIterator.Close()
 
+	// 4. Iterate and Parse Results
 	var policies []LockPolicy
-
 	for resultsIterator.HasNext() {
 		res, err := resultsIterator.Next()
 		if err != nil {
@@ -208,9 +235,9 @@ func (s *SmartContract) GetLockPoliciesByOrg(
 
 		var policy LockPolicy
 		if err := json.Unmarshal(res.Value, &policy); err != nil {
-			return nil, err
+			// Log this error but continue? For now, we fail the entire query.
+			return nil, fmt.Errorf("failed to unmarshal policy: %w", err)
 		}
-
 		policies = append(policies, policy)
 	}
 
@@ -226,7 +253,7 @@ func (s *SmartContract) saveLockPolicy(
 	// This function looks okay, provided 'version' matches the format used in CreateLockPolicy
 	key, err := ctx.GetStub().CreateCompositeKey(
 		indexPolicy,
-		[]string{policy.OrgMSP, strconv.Itoa(policy.Version)},
+		[]string{policy.CreatedBy.OrgMSP, strconv.Itoa(policy.Version)},
 	)
 	if err != nil {
 		return err
@@ -252,7 +279,7 @@ func (s *SmartContract) enforceLockPolicy(
 
 	// 2. Load the SPECIFIC policy version this record is tied to.
 	// We do NOT check if policy.Active is true. Historical policies must still be enforced.
-	policy, err := s.LoadLockPolicy(
+	policy, err := s.loadLockPolicy(
 		ctx,
 		record.Actor.OrgMSP,
 		record.LockPolicyID,

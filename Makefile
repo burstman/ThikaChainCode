@@ -323,18 +323,22 @@ package-cc:
 # 2. Install the package on both Org1 and Org2
 install-cc:
 	@echo "⬇️  Installing on Org1..."
-	@export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
+	@export PATH=${HOME}/fabric-samples/bin:$PATH && \
+	export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
 	export CORE_PEER_LOCALMSPID=Org1MSP && \
-	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
-	
+	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG1_TLS_ROOT) && \
+	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
+	export CORE_PEER_ADDRESS=$(ORG1_HOST):$(ORG1_PORT) && \
+	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || echo "⚠️  Chaincode might already be installed. Ignoring error..."
+
 	@echo "⬇️  Installing on Org2..."
-	@export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
+	@export PATH=${HOME}/fabric-samples/bin:$PATH && \
+	export FABRIC_CFG_PATH=${HOME}/fabric-samples/config/ && \
 	export CORE_PEER_LOCALMSPID=Org2MSP && \
 	export CORE_PEER_TLS_ROOTCERT_FILE=$(ORG2_TLS_ROOT) && \
 	export CORE_PEER_MSPCONFIGPATH=$(TEST_NETWORK)/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp && \
 	export CORE_PEER_ADDRESS=$(ORG2_HOST):$(ORG2_PORT) && \
-	export CORE_PEER_TLS_SERVERHOSTOVERRIDE=peer0.org2.example.com && \
-	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || true
+	peer lifecycle chaincode install $(CC_NAME)_$(CC_VERSION).tar.gz || echo "⚠️  Chaincode might already be installed. Ignoring error..."
 
 # 3. Approve the definition for both Orgs
 # Uses calculatepackageid to get the exact ID of the local tarball

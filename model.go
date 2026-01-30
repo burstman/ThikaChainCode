@@ -46,3 +46,11 @@ type PaginatedResponse struct {
 	Bookmark     string          `json:"bookmark"`
 	RecordsCount int32           `json:"recordsCount"`
 }
+
+// InvoiceData represents the structure for storing XML invoice information.
+// The XML content is expected to be Base64 encoded.
+type InvoiceData struct {
+	Filename   string `json:"filename"`   // e.g., "invoice-123.xml"
+	MIMEType   string `json:"mimeType"`   // "application/xml"
+	XMLContent string `json:"xmlContent"` // The Base64 encoded XML string
+}

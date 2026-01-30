@@ -1,0 +1,282 @@
+openapi: 3.0.3
+
+info:
+  title: Generic Ledger Platform API
+  description: |
+    A generic enterprise ledger API backed by Hyperledger Fabric.
+    Organizations can store arbitrary business data, update it,
+    retrieve history, and enforce lock policies.
+  version: 1.0.0
+
+servers:
+  - url: https://api.yourplatform.com/v1
+    description: Production
+  - url: http://localhost:8080/v1
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+paths:
+
+  /records:
+    post:
+      summary: Create a ledger record
+      description: |
+        Creates a new ledger record with arbitrary business data.
+        The record is owned by the caller's organization.
+      operationId: createRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRecordRequest'
+      responses:
+        "201":
+          description: Record created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerRecord'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "409":
+          $ref: '#/components/responses/Conflict'
+
+    get:
+      summary: List records
+      description: |
+        Lists records owned by the caller's organization.
+        Supports pagination.
+      operationId: listRecords
+      parameters:
+        - name: bookmark
+          in: query
+          schema:
+            type: string
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Paginated list of records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+
+  /records/{recordId}:
+    get:
+      summary: Get a ledger record
+      operationId: getRecord
+      parameters:
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ledger record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerRecord'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update business data
+      description: |
+        Replaces the business data of a record.
+        Fails if the record is locked by policy.
+      operationId: updateBusinessData
+      parameters:
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBusinessDataRequest'
+      responses:
+        "200":
+          description: Updated record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerRecord'
+        "423":
+          $ref: '#/components/responses/Locked'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /records/{recordId}/history:
+    get:
+      summary: Get record history
+      description: |
+        Returns the full immutable history of a ledger record.
+      operationId: getRecordHistory
+      parameters:
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Record history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HistoryEntry'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+
+    Actor:
+      type: object
+      properties:
+        orgMsp:
+          type: string
+        userId:
+          type: string
+
+    Status:
+      type: object
+      properties:
+        code:
+          type: string
+        note:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+
+    LedgerRecord:
+      type: object
+      properties:
+        docType:
+          type: string
+          example: LedgerRecord
+        recordId:
+          type: string
+        actor:
+          $ref: '#/components/schemas/Actor'
+        createdAt:
+          type: string
+          format: date-time
+        businessData:
+          type: object
+          additionalProperties: true
+        status:
+          $ref: '#/components/schemas/Status'
+        locked:
+          type: boolean
+        lockedAt:
+          type: string
+        lockPolicyId:
+          type: string
+        policyVersion:
+          type: integer
+
+    CreateRecordRequest:
+      type: object
+      required:
+        - recordId
+        - businessData
+      properties:
+        recordId:
+          type: string
+        businessData:
+          type: object
+          additionalProperties: true
+
+    UpdateBusinessDataRequest:
+      type: object
+      required:
+        - businessData
+      properties:
+        businessData:
+          type: object
+          additionalProperties: true
+
+    HistoryEntry:
+      type: object
+      properties:
+        txId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        value:
+          $ref: '#/components/schemas/LedgerRecord'
+        isDelete:
+          type: boolean
+
+    PaginatedResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerRecord'
+        bookmark:
+          type: string
+        recordsCount:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Locked:
+      description: Record is locked by policy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

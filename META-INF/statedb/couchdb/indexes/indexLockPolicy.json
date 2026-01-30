@@ -1,0 +1,12 @@
+{
+    "index": {
+        "fields": [
+            "docType",
+            "policy_id",
+            "created_at"
+        ]
+    },
+    "ddoc": "indexLockPolicyDoc",
+    "name": "indexLockPolicy",
+    "type": "json"
+}
