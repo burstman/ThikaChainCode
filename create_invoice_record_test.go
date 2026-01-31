@@ -228,7 +228,10 @@ func TestCreateInvoiceRecord(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, result)
 				assert.Equal(t, tt.recordID, result.RecordID)
-				assert.Equal(t, tt.xmlBase64, result.BusinessData.XMLContent)
+				data, ok := result.BusinessData.(InvoiceData)
+				assert.True(t, ok, "BusinessData should be of type InvoiceData")
+				assert.Equal(t, tt.filename, data.Filename)
+				assert.Equal(t, tt.xmlBase64, data.XMLContent)
 			}
 
 			// Verify that all expectations were met
