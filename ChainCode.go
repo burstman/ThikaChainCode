@@ -25,7 +25,7 @@ func main() {
 	}
 }
 
-func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface,
+func (s *SmartContract) CreateBusinessDataRecord(ctx contractapi.TransactionContextInterface,
 	RecordID string,
 	businessdata string) (*LedgerRecord, error) {
 	businessdataBytes := []byte(businessdata)
@@ -41,10 +41,6 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 	// Validate and Unmarshal the input string into a generic interface map
 	var bizDataInterface interface{}
 	if err := json.Unmarshal(businessdataBytes, &bizDataInterface); err != nil {
-		return nil, fmt.Errorf("businessData must be valid JSON")
-	}
-
-	if !json.Valid(businessdataBytes) {
 		return nil, fmt.Errorf("businessData must be valid JSON")
 	}
 
@@ -75,8 +71,10 @@ func (s *SmartContract) CreateRecord(ctx contractapi.TransactionContextInterface
 		Actor:        *actor,
 		CreatedAt:    timestamp,
 		BusinessData: bizDataInterface,
-		Status:       Status{Code: "CREATED"}, // Default initial status
-		Locked:       false,
+		Status: Status{Code: "CREATED",
+			UpdatedAt: timestamp,
+		}, // Default initial status
+		Locked: false,
 	}
 
 	recordJSON, err := json.Marshal(record)

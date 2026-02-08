@@ -1,98 +1,129 @@
 openapi: 3.0.3
-
 info:
-  title: Generic Ledger Platform API
-  description: |
-    A generic enterprise ledger API backed by Hyperledger Fabric.
-    Organizations can store arbitrary business data, update it,
-    retrieve history, and enforce lock policies.
-  version: 1.0.0
+  title: Ledger Proof API
+  description: API for managing ledger records with specific support for Invoices and Generic Business Data.
+  version: "1.0.0"
 
 servers:
-  - url: https://api.yourplatform.com/v1
-    description: Production
-  - url: http://localhost:8080/v1
-    description: Local development
-
-security:
-  - BearerAuth: []
+  - url: http://localhost:8080
+    description: Local Development Server
 
 paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: checkHealth
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
 
-  /records:
+  # ----------------------------------------------------------------
+  # 1. CREATE: GENERIC BUSINESS DATA
+  # Explicit endpoint for creating records with arbitrary JSON
+  # ----------------------------------------------------------------
+  /records/business-data:
     post:
-      summary: Create a ledger record
-      description: |
-        Creates a new ledger record with arbitrary business data.
-        The record is owned by the caller's organization.
-      operationId: createRecord
+      summary: Create a record with generic business data
+      description: Creates a new ledger record containing arbitrary JSON data.
+      operationId: createBusinessDataRecord
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateRecordRequest'
+              $ref: "#/components/schemas/CreateBusinessDataRequest"
       responses:
         "201":
-          description: Record created
+          description: Record created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LedgerRecord'
+                $ref: "#/components/schemas/LedgerRecord"
         "400":
-          $ref: '#/components/responses/BadRequest'
+          $ref: "#/components/responses/BadRequest"
         "409":
-          $ref: '#/components/responses/Conflict'
-
-    get:
-      summary: List records
-      description: |
-        Lists records owned by the caller's organization.
-        Supports pagination.
-      operationId: listRecords
-      parameters:
-        - name: bookmark
-          in: query
-          schema:
-            type: string
-        - name: pageSize
-          in: query
-          schema:
-            type: integer
-            default: 10
-      responses:
-        "200":
-          description: Paginated list of records
+          description: Record already exists
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedResponse'
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
+  # ----------------------------------------------------------------
+  # 2. CREATE: INVOICE
+  # Explicit endpoint for creating records with XML Invoice data
+  # ----------------------------------------------------------------
+  /records/invoice:
+    post:
+      summary: Create an Invoice record
+      description: Creates a new ledger record specifically for storing an XML invoice.
+      operationId: createInvoiceRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvoiceRequest"
+      responses:
+        "201":
+          description: Invoice record created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Record already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ----------------------------------------------------------------
+  # 3. READ: COMMON
+  # Retrieving a record is the same regardless of its type
+  # ----------------------------------------------------------------
   /records/{recordId}:
     get:
-      summary: Get a ledger record
+      summary: Get a ledger record by ID
       operationId: getRecord
       parameters:
         - name: recordId
           in: path
           required: true
+          description: The unique ID of the ledger record
           schema:
             type: string
       responses:
         "200":
-          description: Ledger record
+          description: Record found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LedgerRecord'
+                $ref: "#/components/schemas/LedgerRecord"
         "404":
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
+  # ----------------------------------------------------------------
+  # 4. UPDATE: GENERIC BUSINESS DATA
+  # ----------------------------------------------------------------
+  /records/{recordId}/business-data:
     put:
-      summary: Update business data
-      description: |
-        Replaces the business data of a record.
-        Fails if the record is locked by policy.
+      summary: Update business data of a generic record
       operationId: updateBusinessData
       parameters:
         - name: recordId
@@ -105,24 +136,64 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdateBusinessDataRequest'
+              $ref: "#/components/schemas/UpdateBusinessDataRequest"
       responses:
         "200":
-          description: Updated record
+          description: Record updated successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LedgerRecord'
-        "423":
-          $ref: '#/components/responses/Locked'
+                $ref: "#/components/schemas/LedgerRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
+  # ----------------------------------------------------------------
+  # 5. UPDATE: INVOICE
+  # ----------------------------------------------------------------
+  /records/{recordId}/invoice:
+    put:
+      summary: Update an existing Invoice record
+      operationId: updateInvoiceRecord
+      parameters:
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInvoiceRequest"
+      responses:
+        "200":
+          description: Invoice updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ----------------------------------------------------------------
+  # 6. HISTORY
+  # ----------------------------------------------------------------
   /records/{recordId}/history:
     get:
-      summary: Get record history
-      description: |
-        Returns the full immutable history of a ledger record.
+      summary: Get history of a record
       operationId: getRecordHistory
       parameters:
         - name: recordId
@@ -132,28 +203,67 @@ paths:
             type: string
       responses:
         "200":
-          description: Record history
+          description: History entries retrieved
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/HistoryEntry'
+                  $ref: "#/components/schemas/HistoryEntry"
         "404":
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
 components:
-
-  securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Bad Request (Invalid input)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Unauthorized (Missing or invalid identity)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Forbidden (Record locked or permission denied)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalServerError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 
   schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 400
+        message:
+          type: string
+          example: "Invalid JSON format"
 
     Actor:
       type: object
+      required:
+        - orgMsp
+        - userId
       properties:
         orgMsp:
           type: string
@@ -162,9 +272,12 @@ components:
 
     Status:
       type: object
+      required:
+        - code
       properties:
         code:
           type: string
+          example: "CREATED"
         note:
           type: string
         updatedAt:
@@ -173,51 +286,39 @@ components:
 
     LedgerRecord:
       type: object
+      required:
+        - recordId
+        - docType
+        - actor
+        - status
       properties:
         docType:
           type: string
-          example: LedgerRecord
+          readOnly: true
+          example: "LedgerRecord"
         recordId:
           type: string
         actor:
-          $ref: '#/components/schemas/Actor'
+          $ref: "#/components/schemas/Actor"
         createdAt:
           type: string
           format: date-time
+          readOnly: true
         businessData:
           type: object
           additionalProperties: true
+          description: Can be generic JSON or InvoiceData structure
         status:
-          $ref: '#/components/schemas/Status'
+          $ref: "#/components/schemas/Status"
         locked:
           type: boolean
         lockedAt:
           type: string
+          format: date-time
         lockPolicyId:
           type: string
         policyVersion:
           type: integer
-
-    CreateRecordRequest:
-      type: object
-      required:
-        - recordId
-        - businessData
-      properties:
-        recordId:
-          type: string
-        businessData:
-          type: object
-          additionalProperties: true
-
-    UpdateBusinessDataRequest:
-      type: object
-      required:
-        - businessData
-      properties:
-        businessData:
-          type: object
-          additionalProperties: true
 
     HistoryEntry:
       type: object
@@ -228,55 +329,62 @@ components:
           type: string
           format: date-time
         value:
-          $ref: '#/components/schemas/LedgerRecord'
+          $ref: "#/components/schemas/LedgerRecord"
         isDelete:
           type: boolean
 
-    PaginatedResponse:
+    # --- Request Schemas ---
+
+    CreateBusinessDataRequest:
       type: object
+      required:
+        - recordId
+        - businessData
       properties:
-        records:
-          type: array
-          items:
-            $ref: '#/components/schemas/LedgerRecord'
-        bookmark:
+        recordId:
           type: string
-        recordsCount:
-          type: integer
+          example: "REC-001"
+        businessData:
+          type: object
+          additionalProperties: true
+          description: Arbitrary JSON data
+          example: { "shipmentId": "SH-99", "weight": 500 }
 
-    ErrorResponse:
+    CreateInvoiceRequest:
       type: object
+      required:
+        - recordId
+        - filename
+        - xmlBase64
       properties:
-        code:
+        recordId:
           type: string
-        message:
+          example: "INV-2023-001"
+        filename:
           type: string
+          example: "invoice.xml"
+        xmlBase64:
+          type: string
+          description: Base64 encoded XML content
+          example: "PD94bWwgdmVyc2lvbj0iMS4wIj8+CjxpbnZvaWNlPgogIDxpZD4xMjM8L2lkPgo8L2ludm9pY2U+"
 
-  responses:
-    BadRequest:
-      description: Invalid request
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
+    UpdateBusinessDataRequest:
+      type: object
+      required:
+        - businessData
+      properties:
+        businessData:
+          type: object
+          additionalProperties: true
+          description: The new business data to replace the existing data
 
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-
-    Conflict:
-      description: Resource already exists
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-
-    Locked:
-      description: Record is locked by policy
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
+    UpdateInvoiceRequest:
+      type: object
+      required:
+        - newFilename
+        - newXmlBase64
+      properties:
+        newFilename:
+          type: string
+        newXmlBase64:
+          type: string

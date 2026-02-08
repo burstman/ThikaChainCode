@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
@@ -25,46 +29,74 @@ func (s *SmartContract) CreateInvoiceRecord(
 ) (*LedgerRecord, error) {
 
 	// 1️⃣ SECURITY CHECK: Validate File Size
-	// We check the length of the input string immediately.
-	// len() in Go returns the number of bytes in the string.
 	inputSize := len(xmlBase64)
-
 	if inputSize > MaxBase64Size {
-		return nil, fmt.Errorf("invoice file too large: %d bytes. Max allowed is %d bytes (approx 1MB original file)", inputSize, MaxBase64Size)
+		return nil, fmt.Errorf("invoice file too large: %d bytes. Max allowed is %d bytes", inputSize, MaxBase64Size)
 	}
-
-	// 2️⃣ Check for empty payload
 	if inputSize == 0 {
 		return nil, fmt.Errorf("invoice content cannot be empty")
 	}
 
+	// 2️⃣ INTEGRITY CHECK: Validate Base64 AND XML Content
+	decodedBytes, err := base64.StdEncoding.DecodeString(xmlBase64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 encoding: %v", err)
+	}
+
+	// Verify the content is actually XML
+	// ✅ NEW: Verify the content is actually XML by ensuring a Root Element exists
+	decoder := xml.NewDecoder(bytes.NewReader(decodedBytes))
+	hasRootElement := false
+	for {
+		t, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("content is not valid XML: %v", err)
+		}
+		// If we encounter a StartElement token, it's a valid XML root element
+		if _, ok := t.(xml.StartElement); ok {
+			hasRootElement = true
+			// If we have a valid root element, break out of the loop
+			break
+		}
+	}
+	if !hasRootElement {
+		return nil, fmt.Errorf("content is not valid XML: no root element found")
+	}
+	// 3️⃣ IDEMPOTENCY CHECK: Ensure record does not already exist
+	existingBytes, err := ctx.GetStub().GetState(recordID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read from world state: %v", err)
+	}
+	if existingBytes != nil {
+		return nil, fmt.Errorf("the record %s already exists", recordID)
+	}
+
 	// --- Continue with existing logic ---
 
-	// Get client identity
 	actor, err := s.getClientActor(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get client actor: %v", err)
 	}
-	// Permission check: Only ORG ADMIN can create records
+
 	err = AssertClientOrgAndAttribute(ctx, *actor, "role", "org_admin")
 	if err != nil {
 		return nil, err
 	}
 
-	// Create the business data payload
 	invoiceData := InvoiceData{
 		Filename:   filename,
 		MIMEType:   "application/xml",
 		XMLContent: xmlBase64,
 	}
 
-	// Get transaction timestamp
 	timestamp, err := s.getTxTimestamp(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transaction timestamp: %v", err)
 	}
 
-	// Assemble the record
 	record := &LedgerRecord{
 		DocType:       "LedgerRecord",
 		RecordID:      recordID,
@@ -76,13 +108,18 @@ func (s *SmartContract) CreateInvoiceRecord(
 		LockedAt:      "",
 		PolicyVersion: 0,
 	}
-	// Marshal and save
+
 	recordBytes, err := json.Marshal(record)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal record: %v", err)
 	}
 
-	return record, ctx.GetStub().PutState(recordID, recordBytes)
+	err = ctx.GetStub().PutState(recordID, recordBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to put state: %v", err)
+	}
+
+	return record, nil
 }
 
 // UpdateInvoiceRecord updates an existing invoice record with a new XML file.
@@ -136,6 +173,25 @@ func (s *SmartContract) UpdateInvoiceRecord(
 	timestamp, err := s.getTxTimestamp(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get timestamp: %v", err)
+	}
+
+	// 2️⃣ INTEGRITY CHECK: Validate Base64 AND XML Content
+	decodedBytes, err := base64.StdEncoding.DecodeString(newXmlBase64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 encoding: %v", err)
+	}
+
+	// Verify the content is actually XML
+	// We use a decoder to scan the tokens. If it encounters syntax errors, it fails.
+	decoder := xml.NewDecoder(bytes.NewReader(decodedBytes))
+	for {
+		_, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("content is not valid XML: %v", err)
+		}
 	}
 
 	// Create new Invoice Data
