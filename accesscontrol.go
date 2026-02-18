@@ -8,13 +8,12 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
-// AssertClientOrgAndAttribute checks if the client has a specific attribute value.
-// It returns true if the attribute matches, or false and an error if it does not.
+// AssertClientOrgAndAttribute checks if the client belongs to the specific MSP
+// and possesses the specific attribute with ONE OF the expected values.
 func AssertClientOrgAndAttribute(ctx contractapi.TransactionContextInterface,
-	expectedActor Actor, attrName string, expectedValue string) error {
+	expectedActor Actor, attrName string, expectedValues ...string) error {
 
-	// DEBUG: Get the ID to see WHO is calling
-	// This usually returns something like "x509::CN=creator1,OU=client..."
+	// 1. Check MSP ID
 	clientMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get client MSP ID: %v", err)
@@ -24,30 +23,27 @@ func AssertClientOrgAndAttribute(ctx contractapi.TransactionContextInterface,
 		return fmt.Errorf("access denied: MSP ID mismatch. Expected '%s', got '%s'", expectedActor.OrgMSP, clientMSP)
 	}
 
-	// Now check the specific attribute
+	// 2. Get the Attribute Value from the certificate
 	val, found, err := ctx.GetClientIdentity().GetAttributeValue(attrName)
 	if err != nil {
 		return fmt.Errorf("error retrieving attribute '%s': %v", attrName, err)
 	}
 
-	// Happy Path: If found and matches, return immediately
-	if found && val == expectedValue {
-		return nil
-	}
-
-	// 3️⃣ Error Handling (Fetch ID only on failure for debugging)
-	clientID, _ := ctx.GetClientIdentity().GetID()
-
+	// 3. Check if the attribute exists
 	if !found {
-		// Include the Client ID in the error message for debugging
+		clientID, _ := ctx.GetClientIdentity().GetID()
 		return fmt.Errorf("access denied: attribute '%s' NOT found. Caller ID: %s", attrName, clientID)
 	}
 
-	if val != expectedValue {
-		return fmt.Errorf("access denied: attribute '%s' value mismatch. Expected '%s', got '%s'", attrName, expectedValue, val)
+	// 4. Check if the value matches ANY of the expected values
+	for _, expected := range expectedValues {
+		if val == expected {
+			return nil // Success: Found a match!
+		}
 	}
 
-	return nil
+	// 5. Failure: The value did not match any of the allowed options
+	return fmt.Errorf("access denied: attribute '%s' value mismatch. Expected one of %v, got '%s'", attrName, expectedValues, val)
 }
 
 func GetClientIdentity(ctx contractapi.TransactionContextInterface) (string, error) {

@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
+
+const roles = "org_admin,record_editor"
 
 // SmartContract provides functions for managing an Order
 type SmartContract struct {
@@ -26,19 +29,28 @@ func main() {
 }
 
 func (s *SmartContract) CreateBusinessDataRecord(ctx contractapi.TransactionContextInterface,
-	RecordID string,
 	businessdata string) (*LedgerRecord, error) {
 	businessdataBytes := []byte(businessdata)
+	// 1. Get the full Transaction ID (64 chars)
+	fullTxID := ctx.GetStub().GetTxID()
 
-	//  Check if order already exists
-	exists, err := s.OrderExists(ctx, RecordID)
+	// 2. Create a 12-Character ID (Deterministic)
+	// We take the first 12 characters.
+	// Example: "e5b38f9a2d1c..." -> "e5b38f9a2d1c"
+	shortID := fullTxID[:12]
+	recordID := fmt.Sprintf("REC-%s", shortID)
+
+	// 3. SAFETY CHECK: Collision Detection
+	// Even with 281 trillion possibilities, it is good practice to check.
+	exists, err := s.OrderExists(ctx, recordID)
 	if err != nil {
 		return nil, err
 	}
 	if exists {
-		return nil, fmt.Errorf("record  %s already exists", RecordID)
+		return nil, fmt.Errorf("record with ID %s already exists", recordID)
 	}
-	// Validate and Unmarshal the input string into a generic interface map
+
+	//4. Validate and Unmarshal the input string into a generic interface map
 	var bizDataInterface interface{}
 	if err := json.Unmarshal(businessdataBytes, &bizDataInterface); err != nil {
 		return nil, fmt.Errorf("businessData must be valid JSON")
@@ -53,21 +65,20 @@ func (s *SmartContract) CreateBusinessDataRecord(ctx contractapi.TransactionCont
 		return nil, err
 	}
 
-	// check permission
-	err = AssertClientOrgAndAttribute(ctx, *actor, "role", "record_creator")
-
-	// Check for system errors or denial
-	if err != nil {
+	// 3. check permission
+	targetRoles := strings.Split(roles, ",")
+	if err = AssertClientOrgAndAttribute(ctx, *actor, "role", targetRoles...); err != nil {
 		return nil, err // Returns: "authorization failed for attribute 'role': ..."
 	}
 
-	// Initialize the struct
+	// 4. Initialize the struct
 	// Note: We do not need to explicitly define the types for Delivery and Payment
 	// inside the literal if we are just using zero-values, but here is how
 	// you would initialize them if needed.
+
 	record := &LedgerRecord{
 		DocType:      "ledgerRecord",
-		RecordID:     RecordID,
+		RecordID:     recordID,
 		Actor:        *actor,
 		CreatedAt:    timestamp,
 		BusinessData: bizDataInterface,
@@ -76,13 +87,13 @@ func (s *SmartContract) CreateBusinessDataRecord(ctx contractapi.TransactionCont
 		}, // Default initial status
 		Locked: false,
 	}
-
+	// 5. Save to State
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 
-	err = ctx.GetStub().PutState(RecordID, recordJSON)
+	err = ctx.GetStub().PutState(recordID, recordJSON)
 	if err != nil {
 		return nil, err
 	}

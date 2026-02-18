@@ -16,19 +16,19 @@ const (
 	MaxXMLFileSize = 1 * 1024 * 1024
 
 	// MaxBase64Size is the calculated limit for the encoded string.
-	// Base64 is 4/3 larger than the original binary.
-	MaxBase64Size = (MaxXMLFileSize * 137) / 100
+	// Base64 encoding represents 3 bytes of binary data as 4 characters,
+	// so the size increases by a factor of 4/3.
+	MaxBase64Size = (4 * MaxXMLFileSize / 3)
 )
 
 // CreateInvoiceRecord creates a new record in the ledger for an XML invoice.
 func (s *SmartContract) CreateInvoiceRecord(
 	ctx contractapi.TransactionContextInterface,
-	recordID string,
 	filename string,
 	xmlBase64 string,
 ) (*LedgerRecord, error) {
 
-	// 1️⃣ SECURITY CHECK: Validate File Size
+	// 1️1 SECURITY CHECK: Validate File Size
 	inputSize := len(xmlBase64)
 	if inputSize > MaxBase64Size {
 		return nil, fmt.Errorf("invoice file too large: %d bytes. Max allowed is %d bytes", inputSize, MaxBase64Size)
@@ -37,14 +37,13 @@ func (s *SmartContract) CreateInvoiceRecord(
 		return nil, fmt.Errorf("invoice content cannot be empty")
 	}
 
-	// 2️⃣ INTEGRITY CHECK: Validate Base64 AND XML Content
+	// 2 INTEGRITY CHECK: Validate Base64 AND XML Content
 	decodedBytes, err := base64.StdEncoding.DecodeString(xmlBase64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base64 encoding: %v", err)
 	}
 
-	// Verify the content is actually XML
-	// ✅ NEW: Verify the content is actually XML by ensuring a Root Element exists
+	// Verify the content is actually XML by ensuring a Root Element exists
 	decoder := xml.NewDecoder(bytes.NewReader(decodedBytes))
 	hasRootElement := false
 	for {
@@ -65,7 +64,17 @@ func (s *SmartContract) CreateInvoiceRecord(
 	if !hasRootElement {
 		return nil, fmt.Errorf("content is not valid XML: no root element found")
 	}
-	// 3️⃣ IDEMPOTENCY CHECK: Ensure record does not already exist
+
+	// 3. Get the full Transaction ID (64 chars)
+	fullTxID := ctx.GetStub().GetTxID()
+
+	// 4. Create a 12-Character ID (Deterministic)
+	// We take the first 12 characters.
+	// Example: "e5b38f9a2d1c..." -> "e5b38f9a2d1c"
+	shortID := fullTxID[:12]
+	recordID := fmt.Sprintf("REC-%s", shortID)
+
+	// 5 IDEMPOTENCY CHECK: Ensure record does not already exist
 	existingBytes, err := ctx.GetStub().GetState(recordID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from world state: %v", err)

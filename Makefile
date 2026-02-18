@@ -638,3 +638,16 @@ get-active-policy:
 	\
 	peer chaincode query -C $(CHANNEL_NAME) -n $(CC_NAME) \
 		-c "{\"function\":\"GetActiveLockPolicy\",\"Args\":[\"$$TARGET_MSP\"]}" | jq
+
+check-last-package-and-version:
+	@echo "INFO: Setting environment for Org1 Admin and querying committed chaincode..."
+	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
+	export CORE_PEER_LOCALMSPID="Org1MSP" && \
+	export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt && \
+	export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
+	export CORE_PEER_ADDRESS=localhost:7051 && \
+	peer lifecycle chaincode querycommitted \
+		--channelID mychannel \
+		--name thika \
+		--output json
+
