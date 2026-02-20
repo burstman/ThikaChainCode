@@ -357,7 +357,7 @@ func TestUpdateInvoiceRecord(t *testing.T) {
 				ctx.On("GetStub").Return(stub)
 
 				// GetID IS called here because admin check fails
-				cid.On("GetID").Return(mockUserID, nil)
+				//cid.On("GetID").Return(mockUserID, nil)
 				cid.On("GetMSPID").Return(mockMSP, nil)
 				cid.On("GetAttributeValue", "role").Return("member", true, nil)
 				ctx.On("GetClientIdentity").Return(cid)
