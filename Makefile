@@ -44,25 +44,48 @@ ORG1_TLS_ROOT := $(TEST_NETWORK)/organizations/peerOrganizations/org1.example.co
 ORG2_TLS_ROOT := $(TEST_NETWORK)/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
 ORG3_TLS_ROOT := $(TEST_NETWORK)/organizations/peerOrganizations/org3.example.com/peers/peer0.org3.example.com/tls/ca.crt
 
-.PHONY: env-org1 env-org2 env-org3 help package clean test reset rollback tunnel start start-org3 export-certs history init resume create check-accepted invoke-update
+.PHONY: env-org1 env-org2 env-org3 help package clean test reset rollback tunnel start start-org3 export-certs history init resume create check-accepted invoke-update create-admin upgrade create-file create-user list-users add-attribute create-policy get-active-policy check-last-package-and-version
 
 help:
 	@echo "Usage: eval \$$(make <target>)"
 	@echo ""
-	@echo "Targets:"
-	@echo "  check-accepted  Check if the chaincode is committed on the channel"
-	@echo "  invoke-update   Invoke UpdateBusinessData with JSON arguments"
+	@echo "Environment Targets:"
 	@echo "  env-org1        Set environment for Organization 1 (Port 7051)"
 	@echo "  env-org2        Set environment for Organization 2 (Port 9051)"
+	@echo "  env-org3        Set environment for Organization 3 (Port 11051)"
+	@echo ""
+	@echo "Network & Lifecycle Targets:"
+	@echo "  start           Start network, create channel, and deploy chaincode"
+	@echo "  start-org3      Start network with Org3 included"
+	@echo "  reset           Tear down the Fabric network (removes all data)"
+	@echo "  resume          Resume network nodes after a stop/reboot"
+	@echo "  check-accepted  Check if the chaincode is committed on the channel"
+	@echo "  check-last-package-and-version Query the last committed chaincode version/sequence"
+	@echo "  upgrade         Full chaincode upgrade flow (package, install, approve, commit)"
+	@echo "                  Usage: make upgrade CC_VERSION=1.2 CC_SEQUENCE=3"
+	@echo ""
+	@echo "Chaincode Operations:"
+	@echo "  create          Create a new record manually (Usage: make create REC_ID=... DESC=... STATUS=...)"
+	@echo "  create-file     Create record from JSON file (Usage: make create-file REC_ID=... FILE=...)"
+	@echo "  invoke-update   Invoke UpdateBusinessData with JSON arguments"
+	@echo "  history         View history of a record (Usage: make history REC_ID=...)"
+	@echo "  query-range     Query records by date range (Usage: make query-range START=... END=...)"
+	@echo "  rollback        Rollback a record (Usage: make rollback REC_ID=... TARGET_TIME=...)"
+	@echo "  create-policy   Create a lock policy (Usage: make create-policy POLICY_ID=... VERSION=... ACTIVE=...)"
+	@echo "  get-active-policy Get the currently active lock policy"
+	@echo ""
+	@echo "Identity Management:"
+	@echo "  create-admin    Create a new Org Admin (Usage: make create-admin USERNAME=... PASSWORD=...)"
+	@echo "  create-user     Create a new User (Usage: make create-user USERNAME=... PASSWORD=... [ROLE=...])"
+	@echo "  list-users      List all registered users for the active organization"
+	@echo "  add-attribute   Add attribute to user (Usage: make add-attribute USERNAME=... PASSWORD=... ATTRS=...)"
+	@echo "  export-certs    Package crypto material for remote client use"
+	@echo ""
+	@echo "Development Targets:"
 	@echo "  package         Package chaincode for production deployment"
 	@echo "  test            Run unit tests"
 	@echo "  clean           Remove generated package files"
-	@echo "  reset           Tear down the Fabric network (removes all data)"
-	@echo "  rollback        Rollback a record (Usage: make rollback REC_ID=... TARGET_TIME=...)"
-	@echo "  start           Start network, create channel, and deploy chaincode"
-	@echo "  history         View history of a record (Usage: make history REC_ID=...)"
-	@echo "  create          Create a new record manually (Usage: make create REC_ID=... DESC=... STATUS=...)"
-	@echo "  create-file     Create record from JSON file (Usage: make create-file REC_ID=... FILE=...)"
+	@echo "  tunnel          Start ngrok tunnels"
 
 env-org1:
 	@echo "export PATH=$(BIN_DIR):\$$PATH"
@@ -650,4 +673,3 @@ check-last-package-and-version:
 		--channelID mychannel \
 		--name thika \
 		--output json
-

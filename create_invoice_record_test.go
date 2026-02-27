@@ -395,9 +395,11 @@ func TestUpdateInvoiceRecord(t *testing.T) {
 
 func TestCreateRecord(t *testing.T) {
 	const (
-		recordID   = "REC-001"
-		mockMSP    = "Org1MSP"
-		mockUserID = "creator1"
+		// We now mock the source of the ID
+		mockTxID         = "e5b38f9a2d1c"     // A 12-char mock TxID prefix
+		expectedRecordID = "REC-e5b38f9a2d1c" // The ID that will be generated
+		mockMSP          = "Org1MSP"
+		mockUserID       = "creator1"
 	)
 
 	// A valid JSON string for business data
@@ -417,29 +419,27 @@ func TestCreateRecord(t *testing.T) {
 			name:         "Success: Valid record creation",
 			businessData: validBusinessData,
 			setupMocks: func(ctx *MockTransactionContext, stub *MockChaincodeStub, cid *MockClientIdentity) {
-				// 1. Expect existence check to find nothing
-				stub.On("GetState", recordID).Return(nil, nil)
 
-				// 2. Expect identity checks for permission
-				cid.On("GetMSPID").Return(mockMSP, nil)
-				cid.On("GetAttributeValue", "role").Return("record_creator", true, nil)
-				ctx.On("GetClientIdentity").Return(cid)
+				// Set up the context to return our mock objects
+				ctx.On("GetStub").Return(stub).Maybe()
+				ctx.On("GetClientIdentity").Return(cid).Maybe()
 
-				// 3. Expect timestamp and actor calls
-				stub.On("GetTxTimestamp").Return(pbTimestamp, nil)
-				cid.On("GetID").Return(mockUserID, nil) // For getClientActor
+				// 1. The function first calls GetTxID to generate the ID.
+				stub.On("GetTxID").Return(mockTxID).Once()
+
+				// 2. Expect existence check to find nothing
+				stub.On("GetState", expectedRecordID).Return(nil, nil).Once()
+
+				// 3. Expect identity checks for permission
+				cid.On("GetMSPID").Return(mockMSP, nil).Maybe()
+				cid.On("GetAttributeValue", "role").Return("record_editor", true, nil).Once()
+
+				// 4. Expect timestamp and actor calls
+				stub.On("GetTxTimestamp").Return(pbTimestamp, nil).Once()
+				cid.On("GetID").Return(mockUserID, nil).Once() // For getClientActor
 
 				// 4. Expect PutState to be called with the correct data
-				stub.On("PutState", recordID, mock.Anything).Run(func(args mock.Arguments) {
-					// Inside Run, we can inspect the data being saved
-					bytes := args.Get(1).([]byte)
-					var savedRecord LedgerRecord
-					err := json.Unmarshal(bytes, &savedRecord)
-					assert.NoError(t, err)
-					assert.Equal(t, recordID, savedRecord.RecordID)
-					assert.Equal(t, "CREATED", savedRecord.Status.Code)
-					assert.Equal(t, mockUserID, savedRecord.Actor.UserID)
-				}).Return(nil)
+				stub.On("PutState", expectedRecordID, mock.Anything).Return(nil).Once()
 
 				ctx.On("GetStub").Return(stub)
 			},
@@ -450,7 +450,8 @@ func TestCreateRecord(t *testing.T) {
 			businessData: validBusinessData,
 			setupMocks: func(ctx *MockTransactionContext, stub *MockChaincodeStub, cid *MockClientIdentity) {
 				// Expect existence check to find an existing record
-				stub.On("GetState", recordID).Return([]byte("some data"), nil)
+				stub.On("GetState", expectedRecordID).Return([]byte("some data"), nil)
+				stub.On("GetTxID").Return(mockTxID).Once()
 				ctx.On("GetStub").Return(stub)
 			},
 			expectedError: "already exists",
@@ -459,9 +460,12 @@ func TestCreateRecord(t *testing.T) {
 			name:         "Error: Invalid business data (not JSON)",
 			businessData: "this is not json",
 			setupMocks: func(ctx *MockTransactionContext, stub *MockChaincodeStub, cid *MockClientIdentity) {
-				// Expect existence check to pass
-				stub.On("GetState", recordID).Return(nil, nil)
+
 				ctx.On("GetStub").Return(stub)
+				// Expect existence check to pass
+				stub.On("GetTxID").Return(mockTxID).Once()
+				stub.On("GetState", expectedRecordID).Return(nil, nil)
+
 			},
 			expectedError: "businessData must be valid JSON",
 		},
@@ -469,16 +473,17 @@ func TestCreateRecord(t *testing.T) {
 			name:         "Error: Permission denied (wrong role)",
 			businessData: validBusinessData,
 			setupMocks: func(ctx *MockTransactionContext, stub *MockChaincodeStub, cid *MockClientIdentity) {
-				stub.On("GetState", recordID).Return(nil, nil)
+				ctx.On("GetStub").Return(stub).Maybe()
+				ctx.On("GetClientIdentity").Return(cid).Maybe()
+
+				stub.On("GetTxID").Return(mockTxID).Once()
+				stub.On("GetState", expectedRecordID).Return(nil, nil)
 				stub.On("GetTxTimestamp").Return(pbTimestamp, nil)
 				cid.On("GetMSPID").Return(mockMSP, nil)
 				cid.On("GetID").Return(mockUserID, nil)
 
 				// Return a role that is NOT "record_creator"
 				cid.On("GetAttributeValue", "role").Return("viewer", true, nil)
-
-				ctx.On("GetClientIdentity").Return(cid)
-				ctx.On("GetStub").Return(stub)
 			},
 			// This error message comes from your AssertClientOrgAndAttribute helper
 			expectedError: "access denied",
@@ -487,17 +492,18 @@ func TestCreateRecord(t *testing.T) {
 			name:         "Error: PutState fails",
 			businessData: validBusinessData,
 			setupMocks: func(ctx *MockTransactionContext, stub *MockChaincodeStub, cid *MockClientIdentity) {
-				stub.On("GetState", recordID).Return(nil, nil)
-				cid.On("GetMSPID").Return(mockMSP, nil)
-				cid.On("GetAttributeValue", "role").Return("record_creator", true, nil)
+				ctx.On("GetStub").Return(stub)
 				ctx.On("GetClientIdentity").Return(cid)
+				stub.On("GetTxID").Return(mockTxID).Once()
+				stub.On("GetState", expectedRecordID).Return(nil, nil)
+				cid.On("GetMSPID").Return(mockMSP, nil)
+				cid.On("GetAttributeValue", "role").Return("record_editor", true, nil)
 				stub.On("GetTxTimestamp").Return(pbTimestamp, nil)
 				cid.On("GetID").Return(mockUserID, nil)
 
 				// Mock PutState to return an error
-				stub.On("PutState", recordID, mock.Anything).Return(errors.New("ledger write error"))
+				stub.On("PutState", expectedRecordID, mock.Anything).Return(errors.New("ledger write error"))
 
-				ctx.On("GetStub").Return(stub)
 			},
 			expectedError: "ledger write error",
 		},

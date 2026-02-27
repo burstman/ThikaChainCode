@@ -21,29 +21,24 @@ const (
 	MaxBase64Size = (4 * MaxXMLFileSize / 3)
 )
 
-// CreateInvoiceRecord creates a new record in the ledger for an XML invoice.
-func (s *SmartContract) CreateInvoiceRecord(
-	ctx contractapi.TransactionContextInterface,
-	filename string,
-	xmlBase64 string,
-) (*LedgerRecord, error) {
-
-	// 1️1 SECURITY CHECK: Validate File Size
+// validateXMLContent checks if the base64 string decodes to valid XML
+func validateXMLContent(xmlBase64 string) error {
+	// 1. Security Check: File Size
 	inputSize := len(xmlBase64)
 	if inputSize > MaxBase64Size {
-		return nil, fmt.Errorf("invoice file too large: %d bytes. Max allowed is %d bytes", inputSize, MaxBase64Size)
+		return fmt.Errorf("invoice file too large: %d bytes. Max allowed is %d bytes", inputSize, MaxBase64Size)
 	}
 	if inputSize == 0 {
-		return nil, fmt.Errorf("invoice content cannot be empty")
+		return fmt.Errorf("invoice content cannot be empty")
 	}
 
-	// 2 INTEGRITY CHECK: Validate Base64 AND XML Content
+	// 2. Integrity Check: Base64 Decoding
 	decodedBytes, err := base64.StdEncoding.DecodeString(xmlBase64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base64 encoding: %v", err)
+		return fmt.Errorf("invalid base64 encoding: %v", err)
 	}
 
-	// Verify the content is actually XML by ensuring a Root Element exists
+	// 3. Content Check: XML Validation
 	decoder := xml.NewDecoder(bytes.NewReader(decodedBytes))
 	hasRootElement := false
 	for {
@@ -52,39 +47,47 @@ func (s *SmartContract) CreateInvoiceRecord(
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("content is not valid XML: %v", err)
+			return fmt.Errorf("content is not valid XML: %v", err)
 		}
-		// If we encounter a StartElement token, it's a valid XML root element
 		if _, ok := t.(xml.StartElement); ok {
 			hasRootElement = true
-			// If we have a valid root element, break out of the loop
 			break
 		}
 	}
 	if !hasRootElement {
-		return nil, fmt.Errorf("content is not valid XML: no root element found")
+		return fmt.Errorf("content is not valid XML: no root element found")
 	}
 
-	// 3. Get the full Transaction ID (64 chars)
-	fullTxID := ctx.GetStub().GetTxID()
+	return nil
+}
 
-	// 4. Create a 12-Character ID (Deterministic)
-	// We take the first 12 characters.
-	// Example: "e5b38f9a2d1c..." -> "e5b38f9a2d1c"
+// CreateInvoiceRecord creates a new record in the ledger for an XML invoice.
+func (s *SmartContract) CreateInvoiceRecord(
+	ctx contractapi.TransactionContextInterface,
+	filename string,
+	xmlBase64 string,
+) (*LedgerRecord, error) {
+
+	// 1. Validate Content (Size, Base64, XML)
+	if err := validateXMLContent(xmlBase64); err != nil {
+		return nil, err
+	}
+
+	// 2. Generate ID
+	fullTxID := ctx.GetStub().GetTxID()
 	shortID := fullTxID[:12]
 	recordID := fmt.Sprintf("REC-%s", shortID)
 
-	// 5 IDEMPOTENCY CHECK: Ensure record does not already exist
-	existingBytes, err := ctx.GetStub().GetState(recordID)
+	// 3. Idempotency Check
+	exists, err := s.OrderExists(ctx, recordID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from world state: %v", err)
+		return nil, err
 	}
-	if existingBytes != nil {
+	if exists {
 		return nil, fmt.Errorf("the record %s already exists", recordID)
 	}
 
-	// --- Continue with existing logic ---
-
+	// 4. Get Actor & Permission
 	actor, err := s.getClientActor(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get client actor: %v", err)
@@ -140,14 +143,8 @@ func (s *SmartContract) UpdateInvoiceRecord(
 ) (*LedgerRecord, error) {
 
 	// 1️⃣ SECURITY CHECK: Validate New File Size
-	// We reuse the constants defined previously
-	inputSize := len(newXmlBase64)
-	if inputSize > MaxBase64Size {
-		return nil, fmt.Errorf("new invoice file too large: %d bytes. Max allowed is %d bytes", inputSize, MaxBase64Size)
-	}
-
-	if inputSize == 0 {
-		return nil, fmt.Errorf("invoice content cannot be empty")
+	if err := validateXMLContent(newXmlBase64); err != nil {
+		return nil, err
 	}
 
 	// 2️⃣ Retrieve the existing record

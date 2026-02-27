@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,7 +78,7 @@ func (s *SmartContract) CreateBusinessDataRecord(ctx contractapi.TransactionCont
 	// you would initialize them if needed.
 
 	record := &LedgerRecord{
-		DocType:      "ledgerRecord",
+		DocType:      "LedgerRecord",
 		RecordID:     recordID,
 		Actor:        *actor,
 		CreatedAt:    timestamp,
@@ -309,11 +310,23 @@ func (s *SmartContract) GetRecordsByDateRange(
 	ctx contractapi.TransactionContextInterface,
 	startStr string,
 	endStr string,
-	pageSize int32,
+	pageSizeStr string,
 	bookmark string,
 ) (*PaginatedResponse, error) {
 
-	// 1. Validate Input Dates
+	// 1. Parse and Validate pageSize
+	var pageSize int32
+	if pageSizeStr == "" {
+		pageSize = 10
+	} else {
+		pageSize64, err := strconv.ParseInt(pageSizeStr, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pageSize format: must be a number")
+		}
+		pageSize = int32(pageSize64)
+	}
+
+	// 2. Validate Input Dates
 	if _, err := time.Parse(time.RFC3339, startStr); err != nil {
 		return nil, fmt.Errorf("invalid start time format (use RFC3339): %v", err)
 	}
@@ -321,19 +334,23 @@ func (s *SmartContract) GetRecordsByDateRange(
 		return nil, fmt.Errorf("invalid end time format (use RFC3339): %v", err)
 	}
 
-	// 2. Construct CouchDB Query
-	// We use a map to safely construct the JSON query string.
-	queryMap := map[string]interface{}{
-		"selector": map[string]interface{}{
-			"docType": "ledgerRecord", // Ensure your CreateRecord sets this!
-			"createdAt": map[string]interface{}{
+	// 3. Construct CouchDB Query
+	// CRITICAL FIX: We use an "$or" operator here to catch both "ledgerRecord" and "LedgerRecord"
+	// to handle the inconsistency in your creation functions.
+	// Ideally, you should standardize your Create functions to use one or the other.
+	queryMap := map[string]any{
+		"selector": map[string]any{
+			"$or": []map[string]any{
+				{"docType": "ledgerRecord"},
+				{"docType": "LedgerRecord"},
+			},
+			"createdAt": map[string]any{
 				"$gte": startStr,
 				"$lte": endStr,
 			},
 		},
-		// OPTIONAL: To ensure consistent pagination, it is best practice to sort.
-		// However, this requires a CouchDB index on ["createdAt"].
-		// "sort": []map[string]string{{"createdAt": "asc"}},
+		// sorting,  index (META-INF/statedb/couchdb/indexes/index.json)
+		"sort": []map[string]string{{"createdAt": "asc"}},
 	}
 
 	queryBytes, err := json.Marshal(queryMap)
@@ -342,15 +359,14 @@ func (s *SmartContract) GetRecordsByDateRange(
 	}
 	queryString := string(queryBytes)
 
-	// 3. Execute Pagination
-	// This API returns the iterator and metadata (which contains the bookmark).
+	// 4. Execute Pagination
 	resultsIterator, responseMetadata, err := ctx.GetStub().GetQueryResultWithPagination(queryString, pageSize, bookmark)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute paginated query: %w", err)
 	}
 	defer resultsIterator.Close()
 
-	// 4. Iterate and Parse Results
+	// 5. Iterate and Parse Results
 	records := []*LedgerRecord{}
 
 	for resultsIterator.HasNext() {
@@ -364,15 +380,13 @@ func (s *SmartContract) GetRecordsByDateRange(
 			return nil, fmt.Errorf("failed to unmarshal record: %w", err)
 		}
 
-		// 5. Apply Dynamic Policy (Lazy Enforcement)
-		// We run the policy check here so the frontend sees the *actual* effective state
-		// (e.g., Locked=true) even if the DB state is technically outdated.
+		// 6. Apply Dynamic Policy (Lazy Enforcement)
 		_ = s.enforceLockPolicy(ctx, &record)
 
 		records = append(records, &record)
 	}
 
-	// 6. Construct Response
+	// 7. Construct Response
 	return &PaginatedResponse{
 		Records:      records,
 		Bookmark:     responseMetadata.Bookmark,

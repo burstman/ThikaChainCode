@@ -272,6 +272,11 @@ func (s *SmartContract) enforceLockPolicy(
 	record *LedgerRecord,
 ) error {
 
+	if record.PolicyVersion == 0 {
+		// No policy tied to this record, so we skip enforcement.
+		return nil
+	}
+
 	// 1. Optimization: If already locked, stop here.
 	if record.Locked {
 		return nil
