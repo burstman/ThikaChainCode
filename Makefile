@@ -673,3 +673,35 @@ check-last-package-and-version:
 		--channelID mychannel \
 		--name thika \
 		--output json
+
+# ---------------------------------------------------------------------------
+# MIGRATION UTILITIES
+# ---------------------------------------------------------------------------
+# Usage: make migrate-doctype OLD=ledgerRecord NEW=LedgerRecord
+# Default variables (Adjust these to match your network setup)
+
+.PHONY: migrate-doctype
+migrate-doctype:
+	@if [ -z "$(OLD)" ] || [ -z "$(NEW)" ]; then \
+		echo "❌ Error: OLD and NEW variables are required."; \
+		echo "Usage: make migrate-doctype OLD=ledgerRecord NEW=LedgerRecord"; \
+		exit 1; \
+	fi
+	@echo "🚀 Migrating documents from '$(OLD)' to '$(NEW)' on chaincode '$(CC_NAME)'..."
+	export FABRIC_CFG_PATH=$(CONFIG_DIR) && \
+	export CORE_PEER_LOCALMSPID="Org1MSP" && \
+	export CORE_PEER_TLS_ROOTCERT_FILE=${TEST_NETWORK}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt && \
+	export CORE_PEER_MSPCONFIGPATH=${TEST_NETWORK}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp && \
+	export CORE_PEER_ADDRESS=localhost:7051 && \
+	peer chaincode invoke \
+		-o localhost:7050 \
+		--ordererTLSHostnameOverride orderer.example.com \
+		--tls \
+		--cafile $(ORDERER_CA) \
+		-C $(CHANNEL_NAME) \
+		-n $(CC_NAME) \
+		--peerAddresses localhost:7051 --tlsRootCertFiles $(ORG1_TLS_ROOT) \
+		--peerAddresses localhost:9051 --tlsRootCertFiles $(ORG2_TLS_ROOT) \
+		-c '{"function":"MigrateDocType","Args":["$(OLD)","$(NEW)"]}' \
+		--waitForEvent
+	@echo "✅ Migration transaction submitted."

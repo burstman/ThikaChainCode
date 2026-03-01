@@ -108,14 +108,14 @@ func (s *SmartContract) UpdateBusinessData(
 	ctx contractapi.TransactionContextInterface,
 	recordID string,
 	newBusinessData string,
-) error {
+) (*LedgerRecord, error) {
 	// Convert the string input to bytes for processing
 	businessDataBytes := []byte(newBusinessData)
 
 	// 1. Read record
 	record, err := s.ReadRecord(ctx, recordID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. ENFORCE POLICY
@@ -123,32 +123,32 @@ func (s *SmartContract) UpdateBusinessData(
 	// it will set record.Locked = true on this specific object instance.
 	err = s.enforceLockPolicy(ctx, record)
 	if err != nil {
-		return fmt.Errorf("failed to enforce lock policy: %v", err)
+		return nil, fmt.Errorf("failed to enforce lock policy: %v", err)
 	}
 
 	// 2. Check lock
 	if record.Locked {
-		return fmt.Errorf("record %s is locked and cannot be modified", recordID)
+		return nil, fmt.Errorf("record %s is locked and cannot be modified", recordID)
 	}
 
 	// 3. Permission check
 	err = AssertClientOrgAndAttribute(ctx, record.Actor, "role", "record_editor")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 4. Validate JSON
 	if !json.Valid(businessDataBytes) {
-		return fmt.Errorf("businessData must be valid JSON")
+		return nil, fmt.Errorf("businessData must be valid JSON")
 	}
 
 	// 5. Optional: enforce same org ownership
 	callerOrg, err := GetClientOrgMSPKey(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if record.Actor.OrgMSP != callerOrg {
-		return fmt.Errorf("organization %s cannot modify record owned by %s",
+		return nil, fmt.Errorf("organization %s cannot modify record owned by %s",
 			callerOrg, record.Actor.OrgMSP)
 	}
 
@@ -158,13 +158,20 @@ func (s *SmartContract) UpdateBusinessData(
 	// (Optional) Update status automatically
 	record.Status.Code = "UPDATED"
 
+	// Update timestamp
+	timestamp, err := s.getTxTimestamp(ctx)
+	if err != nil {
+		return nil, err
+	}
+	record.Status.UpdatedAt = timestamp
+
 	// 7. Persist
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return ctx.GetStub().PutState(recordID, recordJSON)
+	return record, ctx.GetStub().PutState(recordID, recordJSON)
 
 }
 
@@ -340,10 +347,7 @@ func (s *SmartContract) GetRecordsByDateRange(
 	// Ideally, you should standardize your Create functions to use one or the other.
 	queryMap := map[string]any{
 		"selector": map[string]any{
-			"$or": []map[string]any{
-				{"docType": "ledgerRecord"},
-				{"docType": "LedgerRecord"},
-			},
+			"docType": "LedgerRecord",
 			"createdAt": map[string]any{
 				"$gte": startStr,
 				"$lte": endStr,
@@ -438,4 +442,73 @@ func (s *SmartContract) getTxTimestamp(ctx contractapi.TransactionContextInterfa
 	tm := time.Unix(txTimestamp.Seconds, int64(txTimestamp.Nanos))
 
 	return tm.Format(time.RFC3339), nil
+}
+
+// MigrateDocType is a utility function to batch update the docType of assets.
+// It is generic and works for LedgerRecords, LockPolicies, or any other JSON asset.
+//
+// Args:
+//
+//	oldDocType: The value to search for (e.g., "ledgerRecord")
+//	newDocType: The value to replace it with (e.g., "LedgerRecord")
+func (s *SmartContract) MigrateDocType(ctx contractapi.TransactionContextInterface,
+	oldDocType string,
+	newDocType string) (string, error) {
+
+	// 1. Input Validation
+	if oldDocType == "" || newDocType == "" {
+		return "", fmt.Errorf("oldDocType and newDocType must not be empty")
+	}
+	if oldDocType == newDocType {
+		return "", fmt.Errorf("oldDocType and newDocType are the same, nothing to do")
+	}
+
+	// 2. Construct Query
+	// We look for any asset where "docType" matches the old value.
+	queryString := fmt.Sprintf(`{"selector":{"docType":"%s"}}`, oldDocType)
+
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
+	if err != nil {
+		return "", fmt.Errorf("failed to get query result: %v", err)
+	}
+	defer resultsIterator.Close()
+
+	// 3. Iterate and Update
+	counter := 0
+	for resultsIterator.HasNext() {
+		response, err := resultsIterator.Next()
+		if err != nil {
+			return "", fmt.Errorf("failed to iterate: %v", err)
+		}
+
+		// 4. Generic Unmarshal
+		// We use map[string]interface{} so we can handle ANY JSON structure
+		// (LedgerRecord, LockPolicy, etc.) without needing the specific struct.
+		var asset map[string]interface{}
+		if err := json.Unmarshal(response.Value, &asset); err != nil {
+			// If it's not JSON, we skip it or log an error.
+			// Here we return error to be safe.
+			return "", fmt.Errorf("failed to unmarshal asset %s: %v", response.Key, err)
+		}
+
+		// 5. Update the docType field
+		asset["docType"] = newDocType
+
+		// 6. Marshal back to bytes
+		updatedBytes, err := json.Marshal(asset)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal asset %s: %v", response.Key, err)
+		}
+
+		// 7. Save to Ledger
+		// This overwrites the existing key with the updated JSON
+		err = ctx.GetStub().PutState(response.Key, updatedBytes)
+		if err != nil {
+			return "", fmt.Errorf("failed to put state for %s: %v", response.Key, err)
+		}
+
+		counter++
+	}
+
+	return fmt.Sprintf("Migration successful. Updated %d records from '%s' to '%s'.", counter, oldDocType, newDocType), nil
 }
